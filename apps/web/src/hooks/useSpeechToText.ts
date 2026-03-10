@@ -79,7 +79,8 @@ export function useSpeechToText({
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const whisperActiveRef = useRef(false);
-  const whisperIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const vadFrameRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const currentRecorderRef = useRef<MediaRecorder | null>(null);
   const intentionalStopRef = useRef(false);
   const hasReceivedResultRef = useRef(false);
@@ -103,7 +104,8 @@ export function useSpeechToText({
     return () => {
       recognitionRef.current?.abort();
       whisperActiveRef.current = false;
-      if (whisperIntervalRef.current) clearInterval(whisperIntervalRef.current);
+      if (vadFrameRef.current !== null) cancelAnimationFrame(vadFrameRef.current);
+      void audioContextRef.current?.close();
       currentRecorderRef.current?.stop();
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
@@ -228,7 +230,11 @@ export function useSpeechToText({
     [transcribeChunk],
   );
 
-  const CHUNK_INTERVAL_MS = 3_000;
+  // VAD constants
+  const SPEECH_THRESHOLD = 0.015; // RMS level to detect speech
+  const SILENCE_DURATION_MS = 700; // silence after speech before sending chunk
+  const MAX_CHUNK_MS = 3_000; // force-send if speaking continuously
+  const VAD_POLL_MS = 50; // how often to check audio level
 
   const startWhisper = useCallback(async () => {
     const mimeType = getSupportedMimeType();
@@ -237,7 +243,7 @@ export function useSpeechToText({
       return;
     }
 
-    console.log("[STT] Starting continuous Whisper recording with mimeType:", mimeType);
+    console.log("[STT] Starting VAD-driven Whisper recording with mimeType:", mimeType);
     setError(null);
     whisperActiveRef.current = true;
 
@@ -245,19 +251,86 @@ export function useSpeechToText({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaStreamRef.current = stream;
 
-      // Start the first chunk recorder
-      currentRecorderRef.current = createChunkRecorder(stream, mimeType);
+      // Set up Web Audio API for VAD
+      const audioCtx = new AudioContext();
+      audioContextRef.current = audioCtx;
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      const pcmBuffer = new Float32Array(analyser.fftSize);
 
-      // Every CHUNK_INTERVAL_MS, stop the current recorder (triggers transcription)
-      // and immediately start a new one so there's no gap in audio capture.
-      whisperIntervalRef.current = setInterval(() => {
-        if (!whisperActiveRef.current || !mediaStreamRef.current) return;
+      let isSpeaking = false;
+      let silenceSince = 0;
+      let chunkStartedAt = 0;
+      let lastPollTime = 0;
+
+      const getRMS = (): number => {
+        analyser.getFloatTimeDomainData(pcmBuffer);
+        let sum = 0;
+        for (let i = 0; i < pcmBuffer.length; i++) sum += pcmBuffer[i]! * pcmBuffer[i]!;
+        return Math.sqrt(sum / pcmBuffer.length);
+      };
+
+      const flushRecorder = () => {
         const prev = currentRecorderRef.current;
-        // Start the new recorder *before* stopping the old one to minimize gap
-        currentRecorderRef.current = createChunkRecorder(stream, mimeType);
+        currentRecorderRef.current = null;
         if (prev?.state === "recording") prev.stop();
-      }, CHUNK_INTERVAL_MS);
+      };
 
+      const pollVAD = (timestamp: number) => {
+        if (!whisperActiveRef.current) return;
+        vadFrameRef.current = requestAnimationFrame(pollVAD);
+
+        // Throttle to ~VAD_POLL_MS
+        if (timestamp - lastPollTime < VAD_POLL_MS) return;
+        lastPollTime = timestamp;
+
+        const rms = getRMS();
+        const now = performance.now();
+
+        if (!isSpeaking) {
+          if (rms >= SPEECH_THRESHOLD) {
+            // Speech started — begin recording
+            isSpeaking = true;
+            silenceSince = 0;
+            chunkStartedAt = now;
+            currentRecorderRef.current = createChunkRecorder(stream, mimeType);
+            console.log("[STT/VAD] Speech detected, recording started");
+          }
+        } else {
+          const chunkAge = now - chunkStartedAt;
+
+          if (rms < SPEECH_THRESHOLD) {
+            if (silenceSince === 0) silenceSince = now;
+            const silenceDuration = now - silenceSince;
+
+            if (silenceDuration >= SILENCE_DURATION_MS || chunkAge >= MAX_CHUNK_MS) {
+              // Silence detected or max chunk reached — flush
+              console.log(
+                `[STT/VAD] Flushing chunk (silence: ${Math.round(silenceDuration)}ms, age: ${Math.round(chunkAge)}ms)`,
+              );
+              flushRecorder();
+              isSpeaking = false;
+              silenceSince = 0;
+            }
+          } else {
+            // Still speaking
+            silenceSince = 0;
+
+            if (chunkAge >= MAX_CHUNK_MS) {
+              // Continuous speech hit max — rotate recorder
+              console.log("[STT/VAD] Max chunk duration reached, rotating recorder");
+              const prev = currentRecorderRef.current;
+              currentRecorderRef.current = createChunkRecorder(stream, mimeType);
+              if (prev?.state === "recording") prev.stop();
+              chunkStartedAt = now;
+            }
+          }
+        }
+      };
+
+      vadFrameRef.current = requestAnimationFrame(pollVAD);
       setIsListening(true);
     } catch (err) {
       console.error("[STT] Microphone access error:", err);
@@ -268,10 +341,12 @@ export function useSpeechToText({
 
   const stopWhisper = useCallback(() => {
     whisperActiveRef.current = false;
-    if (whisperIntervalRef.current) {
-      clearInterval(whisperIntervalRef.current);
-      whisperIntervalRef.current = null;
+    if (vadFrameRef.current !== null) {
+      cancelAnimationFrame(vadFrameRef.current);
+      vadFrameRef.current = null;
     }
+    void audioContextRef.current?.close();
+    audioContextRef.current = null;
     // Stop the current recorder to flush the last chunk for transcription
     if (currentRecorderRef.current?.state === "recording") {
       currentRecorderRef.current.stop();
