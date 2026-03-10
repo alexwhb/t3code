@@ -1,5 +1,12 @@
 import { Effect, Layer, Schema, ServiceMap } from "effect";
 import type { SttTranscribeInput, SttTranscribeResult } from "@t3tools/contracts";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { writeFile, readFile, unlink, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const execFileAsync = promisify(execFile);
 
 export class SttTranscribeError extends Schema.TaggedErrorClass<SttTranscribeError>()(
   "SttTranscribeError",
@@ -18,6 +25,32 @@ export class SttService extends ServiceMap.Service<SttService, SttServiceShape>(
 
 const DEFAULT_WHISPER_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions";
 const DEFAULT_WHISPER_MODEL = "whisper-1";
+
+/** Convert audio buffer to 16kHz mono WAV using ffmpeg (required by whisper.cpp). */
+const convertToWav = (audioBuffer: Buffer, mimeType: string): Effect.Effect<Buffer, SttTranscribeError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const dir = await mkdtemp(join(tmpdir(), "stt-"));
+      const ext = mimeType.includes("mp4") ? "mp4" : mimeType.includes("ogg") ? "ogg" : "webm";
+      const inputPath = join(dir, `input.${ext}`);
+      const outputPath = join(dir, "output.wav");
+      await writeFile(inputPath, audioBuffer);
+      await execFileAsync("ffmpeg", [
+        "-y", "-i", inputPath,
+        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+        outputPath,
+      ]);
+      const wav = await readFile(outputPath);
+      // Clean up temp files
+      await unlink(inputPath).catch(() => {});
+      await unlink(outputPath).catch(() => {});
+      return wav;
+    },
+    catch: (cause) =>
+      new SttTranscribeError({
+        message: `Failed to convert audio to WAV: ${String(cause)}`,
+      }),
+  });
 
 const makeSttService = Effect.succeed(
   SttService.of({
@@ -41,9 +74,17 @@ const makeSttService = Effect.succeed(
 
         const isOpenAi = endpoint.includes("api.openai.com");
 
+        // whisper.cpp only accepts WAV — convert if needed
+        const needsConversion = !isOpenAi && !input.mimeType.includes("wav");
+        const finalBuffer = needsConversion
+          ? yield* convertToWav(audioBuffer, input.mimeType)
+          : audioBuffer;
+        const finalMime = needsConversion ? "audio/wav" : input.mimeType;
+        const finalExt = needsConversion ? "wav" : ext;
+
         // Build multipart form data
         const formData = new FormData();
-        formData.append("file", new Blob([audioBuffer], { type: input.mimeType }), `audio.${ext}`);
+        formData.append("file", new Blob([finalBuffer], { type: finalMime }), `audio.${finalExt}`);
         // OpenAI requires the model field; whisper.cpp ignores it
         if (isOpenAi || model !== DEFAULT_WHISPER_MODEL) {
           formData.append("model", model);
