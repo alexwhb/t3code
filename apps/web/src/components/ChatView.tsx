@@ -112,6 +112,7 @@ import {
 } from "../types";
 import { basenameOfPath, getVscodeIconUrlForEntry } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
+import { useSpeechToText } from "../hooks/useSpeechToText";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import {
   buildTurnDiffTree,
@@ -147,6 +148,8 @@ import {
   XIcon,
   CopyIcon,
   CheckIcon,
+  MicIcon,
+  MicOffIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -582,6 +585,41 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const { settings } = useAppSettings();
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const sttProvider = (settings.sttProvider || "whisper") as import("../sttProviders").SttProviderKind;
+  const stt = useSpeechToText({
+    provider: sttProvider,
+    onTranscript: useCallback(
+      (text: string) => {
+        const snap = composerEditorRef.current?.readSnapshot();
+        const currentValue = snap?.value ?? promptRef.current;
+        const separator = currentValue.length > 0 && !currentValue.endsWith(" ") ? " " : "";
+        const next = currentValue + separator + text;
+        promptRef.current = next;
+        setPrompt(next);
+        setComposerCursor(next.length);
+        window.requestAnimationFrame(() => {
+          composerEditorRef.current?.focusAt(next.length);
+        });
+      },
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [],
+    ),
+    transcribeAudio: useCallback(async (audioBase64: string, mimeType: string) => {
+      const api = readNativeApi();
+      if (!api) throw new Error("Not connected to server.");
+      const s = settingsRef.current;
+      const result = await api.stt.transcribe({
+        audioBase64,
+        mimeType,
+        endpoint: s.sttWhisperEndpoint || undefined,
+        apiKey: s.sttWhisperApiKey || undefined,
+        model: s.sttWhisperModel || undefined,
+      });
+      return result.text;
+    }, []),
+  });
   const navigate = useNavigate();
   const rawSearch = useSearch({
     strict: false,
@@ -3914,7 +3952,32 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           </svg>
                         </button>
                       ) : pendingUserInputs.length === 0 ? (
-                        showPlanFollowUpPrompt ? (
+                        <>
+                        {stt.isSupported ? (
+                          <div className="relative flex items-center">
+                            <button
+                              type="button"
+                              className={cn(
+                                "flex size-8 items-center justify-center rounded-full transition-all duration-150",
+                                stt.error
+                                  ? "text-destructive hover:bg-destructive/10"
+                                  : stt.isListening || stt.isTranscribing
+                                    ? "bg-rose-500/90 text-white animate-pulse hover:bg-rose-500"
+                                    : "text-muted-foreground/60 hover:text-foreground/80 hover:bg-accent",
+                              )}
+                              onClick={() => (stt.isListening ? stt.stop() : stt.start())}
+                              title={stt.error ?? (stt.isListening ? "Stop recording" : "Start voice input")}
+                              aria-label={stt.isListening ? "Stop recording" : "Start voice input"}
+                            >
+                              {stt.isListening || stt.isTranscribing ? (
+                                <MicOffIcon className="size-4" />
+                              ) : (
+                                <MicIcon className="size-4" />
+                              )}
+                            </button>
+                          </div>
+                        ) : null}
+                        {showPlanFollowUpPrompt ? (
                           prompt.trim().length > 0 ? (
                             <Button
                               type="submit"
@@ -4015,7 +4078,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
                               </svg>
                             )}
                           </button>
-                        )
+                        )}
+                        </>
                       ) : null}
                     </div>
                   </div>

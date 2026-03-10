@@ -34,6 +34,18 @@ const AppSettingsSchema = Schema.Struct({
   defaultClaudeCodeModel: Schema.String.check(Schema.isMaxLength(256)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),
   ),
+  sttProvider: Schema.String.check(Schema.isMaxLength(64)).pipe(
+    Schema.withConstructorDefault(() => Option.some("whisper")),
+  ),
+  sttWhisperEndpoint: Schema.String.check(Schema.isMaxLength(1024)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  sttWhisperApiKey: Schema.String.check(Schema.isMaxLength(256)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  sttWhisperModel: Schema.String.check(Schema.isMaxLength(128)).pipe(
+    Schema.withConstructorDefault(() => Option.some("whisper-1")),
+  ),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {

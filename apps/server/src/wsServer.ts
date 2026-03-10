@@ -58,6 +58,7 @@ import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
 import { Open, resolveAvailableEditors } from "./open";
+import { SttService } from "./stt/Services/SttService";
 import { ServerConfig } from "./config";
 import { GitCore } from "./git/Services/GitCore.ts";
 import { tryHandleProjectFaviconRequest } from "./projectFaviconRoute";
@@ -218,6 +219,7 @@ export type ServerRuntimeServices =
   | TerminalManager
   | Keybindings
   | Open
+  | SttService
   | AnalyticsService;
 
 export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycleError>()(
@@ -256,6 +258,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
   const git = yield* GitCore;
+  const sttService = yield* SttService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
@@ -907,6 +910,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         const body = stripRequestTag(request.body);
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
         return { keybindings: keybindingsConfig, issues: [] };
+      }
+
+      case WS_METHODS.sttTranscribe: {
+        const body = stripRequestTag(request.body);
+        return yield* sttService.transcribe(body);
       }
 
       default: {

@@ -10,6 +10,7 @@ import {
   MAX_CUSTOM_MODEL_LENGTH,
   useAppSettings,
 } from "../appSettings";
+import { STT_PROVIDER_OPTIONS, type SttProviderKind } from "../sttProviders";
 import { PROVIDER_OPTIONS } from "../session-logic";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
@@ -586,6 +587,108 @@ function SettingsRouteView() {
                 </p>
                 {openKeybindingsError ? (
                   <p className="text-xs text-destructive">{openKeybindingsError}</p>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Voice Input</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Configure speech-to-text for voice prompts in the chat composer.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <label htmlFor="stt-provider" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">STT provider</span>
+                  <select
+                    id="stt-provider"
+                    value={settings.sttProvider || "whisper"}
+                    onChange={(event) => updateSettings({ sttProvider: event.target.value })}
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    {STT_PROVIDER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-muted-foreground">
+                    {STT_PROVIDER_OPTIONS.find((o) => o.value === (settings.sttProvider || "whisper"))?.description}
+                  </span>
+                </label>
+
+                {(settings.sttProvider || "whisper") === "whisper" ? (
+                  <>
+                    <label htmlFor="stt-whisper-endpoint" className="block space-y-1">
+                      <span className="text-xs font-medium text-foreground">Whisper endpoint</span>
+                      <Input
+                        id="stt-whisper-endpoint"
+                        value={settings.sttWhisperEndpoint}
+                        onChange={(event) =>
+                          updateSettings({ sttWhisperEndpoint: event.target.value })
+                        }
+                        placeholder="http://localhost:8080/v1/audio/transcriptions"
+                        spellCheck={false}
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        Leave blank to use the server&apos;s default (OpenAI API). Set to a local URL for self-hosted Whisper.
+                      </span>
+                    </label>
+
+                    <label htmlFor="stt-whisper-api-key" className="block space-y-1">
+                      <span className="text-xs font-medium text-foreground">API key</span>
+                      <Input
+                        id="stt-whisper-api-key"
+                        type="password"
+                        value={settings.sttWhisperApiKey}
+                        onChange={(event) =>
+                          updateSettings({ sttWhisperApiKey: event.target.value })
+                        }
+                        placeholder="sk-..."
+                        spellCheck={false}
+                      />
+                      <span className="text-xs text-muted-foreground">
+                        Optional. Leave blank if the server already has OPENAI_API_KEY set, or for local Whisper.
+                      </span>
+                    </label>
+
+                    <label htmlFor="stt-whisper-model" className="block space-y-1">
+                      <span className="text-xs font-medium text-foreground">Model</span>
+                      <Input
+                        id="stt-whisper-model"
+                        value={settings.sttWhisperModel}
+                        onChange={(event) =>
+                          updateSettings({ sttWhisperModel: event.target.value })
+                        }
+                        placeholder="whisper-1"
+                        spellCheck={false}
+                      />
+                    </label>
+                  </>
+                ) : null}
+
+                {(settings.sttProvider !== defaults.sttProvider ||
+                  settings.sttWhisperEndpoint !== defaults.sttWhisperEndpoint ||
+                  settings.sttWhisperApiKey !== defaults.sttWhisperApiKey ||
+                  settings.sttWhisperModel !== defaults.sttWhisperModel) ? (
+                  <div className="flex justify-end">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        updateSettings({
+                          sttProvider: defaults.sttProvider,
+                          sttWhisperEndpoint: defaults.sttWhisperEndpoint,
+                          sttWhisperApiKey: defaults.sttWhisperApiKey,
+                          sttWhisperModel: defaults.sttWhisperModel,
+                        })
+                      }
+                    >
+                      Reset voice input settings
+                    </Button>
+                  </div>
                 ) : null}
               </div>
             </section>
