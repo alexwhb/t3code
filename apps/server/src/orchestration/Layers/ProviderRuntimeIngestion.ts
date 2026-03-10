@@ -172,6 +172,92 @@ function requestKindFromCanonicalRequestType(
   }
 }
 
+/**
+ * Extract a short descriptive string from tool input parameters.
+ * Falls back to undefined if no meaningful detail can be extracted.
+ */
+function describeToolInput(toolName: string | undefined, data: unknown): string | undefined {
+  if (!toolName || !data || typeof data !== "object") return undefined;
+
+  const rec = data as Record<string, unknown>;
+  // Claude Code nests input under item.input; Codex under item.input or directly
+  const item = rec.item && typeof rec.item === "object" ? (rec.item as Record<string, unknown>) : undefined;
+  const input = (() => {
+    const candidates = [
+      item?.input,
+      rec.input,
+    ];
+    for (const c of candidates) {
+      if (c && typeof c === "object") return c as Record<string, unknown>;
+    }
+    return undefined;
+  })();
+  if (!input) return undefined;
+
+  const name = toolName.toLowerCase();
+
+  if (name === "glob") {
+    return asNonEmptyString(input.pattern);
+  }
+  if (name === "read") {
+    return shortenPath(asNonEmptyString(input.file_path));
+  }
+  if (name === "grep") {
+    const pattern = asNonEmptyString(input.pattern);
+    const path = shortenPath(asNonEmptyString(input.path));
+    if (pattern && path) return `"${pattern}" in ${path}`;
+    return pattern ? `"${pattern}"` : path;
+  }
+  if (name === "edit") {
+    return shortenPath(asNonEmptyString(input.file_path));
+  }
+  if (name === "write") {
+    return shortenPath(asNonEmptyString(input.file_path));
+  }
+  if (name === "bash") {
+    const cmd = asNonEmptyString(input.command) ?? asNonEmptyString(input.cmd);
+    return cmd ? truncateDetail(cmd, 80) : undefined;
+  }
+  if (name === "agent") {
+    return asNonEmptyString(input.description);
+  }
+  if (name === "webfetch") {
+    return asNonEmptyString(input.url);
+  }
+  if (name === "websearch") {
+    return asNonEmptyString(input.query);
+  }
+  if (name === "skill") {
+    return asNonEmptyString(input.skill);
+  }
+  if (name === "lsp") {
+    const method = asNonEmptyString(input.method);
+    const filePath = shortenPath(asNonEmptyString(input.file_path));
+    if (method && filePath) return `${method} ${filePath}`;
+    return method ?? filePath;
+  }
+  if (name === "notebookedit") {
+    return shortenPath(asNonEmptyString(input.notebook_path));
+  }
+  if (name === "toolsearch") {
+    return asNonEmptyString(input.query);
+  }
+  // Generic fallback: look for common parameter names
+  return shortenPath(asNonEmptyString(input.file_path)) ?? asNonEmptyString(input.pattern) ?? asNonEmptyString(input.query);
+}
+
+function asNonEmptyString(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+function shortenPath(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  // Show only the last 2-3 path segments for brevity
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length <= 3) return path;
+  return `…/${parts.slice(-3).join("/")}`;
+}
+
 function isToolLifecycleItemType(itemType: string): boolean {
   return (
     itemType === "command_execution" ||
@@ -438,9 +524,14 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
-      const toolDetail = event.payload.detail ? truncateDetail(event.payload.detail) : undefined;
+      const toolName = event.payload.detail ? truncateDetail(event.payload.detail) : undefined;
+      const inputDetail = describeToolInput(toolName, event.payload.data);
       const completedTitle = event.payload.title ?? "Tool";
-      const completedSummary = toolDetail ? `${completedTitle}: ${toolDetail}` : `${completedTitle} complete`;
+      const completedSummary = toolName
+        ? inputDetail
+          ? `${toolName}: ${inputDetail}`
+          : `${completedTitle}: ${toolName}`
+        : `${completedTitle} complete`;
       return [
         {
           id: event.eventId,
@@ -450,7 +541,7 @@ function runtimeEventToActivities(
           summary: completedSummary,
           payload: {
             itemType: event.payload.itemType,
-            ...(toolDetail ? { detail: toolDetail } : {}),
+            ...(toolName ? { detail: toolName } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -462,16 +553,23 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      const startedToolName = event.payload.detail ? truncateDetail(event.payload.detail) : undefined;
+      const startedInputDetail = describeToolInput(startedToolName, event.payload.data);
+      const startedSummary = startedToolName
+        ? startedInputDetail
+          ? `${startedToolName}: ${startedInputDetail}`
+          : `${startedToolName} started`
+        : `${event.payload.title ?? "Tool"} started`;
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.started",
-          summary: `${event.payload.title ?? "Tool"} started`,
+          summary: startedSummary,
           payload: {
             itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(startedToolName ? { detail: startedToolName } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
