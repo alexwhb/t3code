@@ -84,10 +84,16 @@ export interface ClaudeCodeStartSessionInput {
   readonly runtimeMode: RuntimeMode;
 }
 
+export interface ClaudeCodeImageAttachment {
+  readonly mediaType: string;
+  readonly base64Data: string;
+}
+
 export interface ClaudeCodeSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
   readonly model?: string;
+  readonly images?: readonly ClaudeCodeImageAttachment[];
   readonly interactionMode?: ProviderInteractionMode;
 }
 
@@ -194,6 +200,8 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
       "claudeCode",
     ) ?? CLAUDE_DEFAULT_MODEL;
 
+    const hasImages = (input.images?.length ?? 0) > 0;
+
     const args = buildClaudeArgs({
       model,
       runtimeMode: context.session.runtimeMode,
@@ -201,7 +209,8 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
       resumeCursor: context.conversationId
         ? { conversationId: context.conversationId }
         : undefined,
-      prompt: input.input,
+      ...(hasImages ? {} : input.input !== undefined ? { prompt: input.input } : {}),
+      ...(hasImages ? { hasImages: true } : {}),
     });
 
     // Kill any previous child that hasn't exited yet
@@ -219,9 +228,34 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    // In print mode Claude waits for stdin to close before flushing the
-    // streamed result and exiting, even when the prompt is passed as an arg.
-    child.stdin.end();
+    if (hasImages) {
+      // When images are present, send a structured user message via stdin
+      // using the stream-json input format (Anthropic content block array).
+      const contentBlocks: unknown[] = [];
+      if (input.input) {
+        contentBlocks.push({ type: "text", text: input.input });
+      }
+      for (const img of input.images!) {
+        contentBlocks.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: img.mediaType,
+            data: img.base64Data,
+          },
+        });
+      }
+      const userMessage = JSON.stringify({
+        type: "user",
+        message: { role: "user", content: contentBlocks },
+      });
+      child.stdin.write(userMessage + "\n");
+      child.stdin.end();
+    } else {
+      // In print mode Claude waits for stdin to close before flushing the
+      // streamed result and exiting, even when the prompt is passed as an arg.
+      child.stdin.end();
+    }
 
     context.child = child;
     context.output = readline.createInterface({ input: child.stdout });
@@ -552,41 +586,25 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
         });
 
         // Emit content blocks as deltas
+        let planModeActive = false;
+        const planTextParts: string[] = [];
+
         for (const block of content) {
           const b = asObject(block);
           if (!b) continue;
           const blockType = asString(b.type);
 
-          if (blockType === "text") {
-            const text = asString(b.text) ?? "";
-            context.assistantTextBuffer += text;
-            this.emitEvent({
-              id: EventId.makeUnsafe(randomUUID()),
-              kind: "notification",
-              provider: "claudeCode",
-              threadId,
-              createdAt: now,
-              method: "item/agentMessage/delta",
-              turnId,
-              ...(itemId ? { itemId } : {}),
-              textDelta: text,
-              payload: event,
-            });
-          } else if (blockType === "thinking") {
-            const thinking = asString(b.thinking) ?? "";
-            this.emitEvent({
-              id: EventId.makeUnsafe(randomUUID()),
-              kind: "notification",
-              provider: "claudeCode",
-              threadId,
-              createdAt: now,
-              method: "item/reasoning/textDelta",
-              turnId,
-              textDelta: thinking,
-              payload: event,
-            });
-          } else if (blockType === "tool_use") {
+          if (blockType === "tool_use") {
             const toolName = asString(b.name);
+            const toolNameLower = toolName?.toLowerCase();
+
+            // Track plan mode boundaries
+            if (toolNameLower === "enterplanmode") {
+              planModeActive = true;
+            } else if (toolNameLower === "exitplanmode") {
+              planModeActive = false;
+            }
+
             const toolId = asString(b.id);
             this.emitEvent({
               id: EventId.makeUnsafe(randomUUID()),
@@ -613,6 +631,42 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
                 item: { type: mapToolType(toolName), ...b },
               },
             });
+          }
+
+          if (blockType === "text") {
+            const text = asString(b.text) ?? "";
+            context.assistantTextBuffer += text;
+
+            // Collect text produced while in plan mode
+            if (planModeActive) {
+              planTextParts.push(text);
+            }
+
+            this.emitEvent({
+              id: EventId.makeUnsafe(randomUUID()),
+              kind: "notification",
+              provider: "claudeCode",
+              threadId,
+              createdAt: now,
+              method: "item/agentMessage/delta",
+              turnId,
+              ...(itemId ? { itemId } : {}),
+              textDelta: text,
+              payload: event,
+            });
+          } else if (blockType === "thinking") {
+            const thinking = asString(b.thinking) ?? "";
+            this.emitEvent({
+              id: EventId.makeUnsafe(randomUUID()),
+              kind: "notification",
+              provider: "claudeCode",
+              threadId,
+              createdAt: now,
+              method: "item/reasoning/textDelta",
+              turnId,
+              textDelta: thinking,
+              payload: event,
+            });
           } else if (blockType === "tool_result") {
             // Tool results from multi-turn agentic flows
             const toolId = asString(b.tool_use_id);
@@ -628,6 +682,21 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
               payload: { ...event, item: { type: "toolResult", ...b } },
             });
           }
+        }
+
+        // Emit proposed plan if plan mode text was captured
+        const planMarkdown = planTextParts.join("").trim();
+        if (planMarkdown.length > 0) {
+          this.emitEvent({
+            id: EventId.makeUnsafe(randomUUID()),
+            kind: "notification",
+            provider: "claudeCode",
+            threadId,
+            createdAt: now,
+            method: "item/plan/proposed",
+            turnId,
+            payload: { planMarkdown },
+          });
         }
 
         // Mark message complete
@@ -927,6 +996,7 @@ export function buildClaudeArgs(input: {
   interactionMode?: ProviderInteractionMode;
   resumeCursor?: unknown;
   prompt?: string;
+  hasImages?: boolean;
 }): string[] {
   const args: string[] = [
     "--output-format", "stream-json",
@@ -948,8 +1018,12 @@ export function buildClaudeArgs(input: {
     args.push("--resume", conversationId);
   }
 
-  // Add prompt as the last argument (for non-interactive mode)
-  if (input.prompt) {
+  // When images are present, use stream-json input so we can send
+  // structured content blocks (text + images) via stdin.
+  if (input.hasImages) {
+    args.push("--print", "--input-format", "stream-json");
+  } else if (input.prompt) {
+    // Add prompt as the last argument (for non-interactive mode)
     args.push("--print", input.prompt);
   }
 

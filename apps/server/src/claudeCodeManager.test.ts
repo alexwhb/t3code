@@ -2,7 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 
-import { ThreadId } from "@t3tools/contracts";
+import { type ProviderEvent, ThreadId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -92,6 +92,22 @@ describe("buildClaudeArgs", () => {
     expect(args).not.toContain("--conversation-id");
   });
 
+  it("uses stream-json input when hasImages is true", () => {
+    const args = buildClaudeArgs({
+      model: "sonnet",
+      runtimeMode: "full-access",
+      prompt: "Describe this image",
+      hasImages: true,
+    });
+
+    expect(args).toContain("--input-format");
+    expect(args).toContain("stream-json");
+    expect(args).toContain("--print");
+    // Prompt should NOT be passed as a CLI arg when using stream-json input
+    expect(args).not.toContain("Describe this image");
+  });
+
+
   it("uses --permission-mode plan when interactionMode is plan", () => {
     const args = buildClaudeArgs({
       model: "sonnet",
@@ -141,6 +157,62 @@ describe("ClaudeCodeManager", () => {
     });
 
     expect(spawnProcess).toHaveBeenCalledTimes(1);
+    expect(child.stdin.writableEnded).toBe(true);
+  });
+
+  it("writes structured content blocks to stdin when images are provided", async () => {
+    const child = makeFakeChildProcess();
+    const stdinChunks: string[] = [];
+    child.stdin.on("data", (chunk: Buffer) => {
+      stdinChunks.push(chunk.toString());
+    });
+    const originalWrite = child.stdin.write.bind(child.stdin);
+    vi.spyOn(child.stdin, "write").mockImplementation(((data: unknown) => {
+      stdinChunks.push(String(data));
+      return originalWrite(data);
+    }) as typeof child.stdin.write);
+
+    const spawnProcess =
+      vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>;
+    const manager = new ClaudeCodeManager({
+      spawnProcess,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-image-stdin");
+
+    await manager.startSession({
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    await manager.sendTurn({
+      threadId,
+      input: "What is in this image?",
+      images: [
+        { mediaType: "image/png", base64Data: "iVBOR..." },
+      ],
+    });
+
+    expect(spawnProcess).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const args = (spawnProcess as any).mock.calls[0]![1] as string[];
+    expect(args).toContain("--input-format");
+    expect(args).toContain("stream-json");
+
+    expect(stdinChunks.length).toBeGreaterThan(0);
+    const written = stdinChunks.join("").trim();
+    // The message is newline-delimited JSON — parse the first line
+    const firstLine = written.split("\n")[0]!;
+    const parsed = JSON.parse(firstLine);
+    expect(parsed.type).toBe("user");
+    expect(parsed.message.role).toBe("user");
+    expect(parsed.message.content).toEqual([
+      { type: "text", text: "What is in this image?" },
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "iVBOR..." },
+      },
+    ]);
     expect(child.stdin.writableEnded).toBe(true);
   });
 
@@ -202,5 +274,96 @@ describe("ClaudeCodeManager", () => {
     ]);
     expect(events.some((event) => event.method === "turn/completed")).toBe(true);
     expect(events.some((event) => event.method === "session/exited")).toBe(false);
+  });
+
+  it("emits item/plan/proposed when assistant response contains EnterPlanMode tool", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess:
+        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-plan-mode");
+    const events: ProviderEvent[] = [];
+
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.startSession({
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    await manager.sendTurn({
+      threadId,
+      input: "Plan the implementation",
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-plan-1",
+          content: [
+            { type: "text", text: "Let me create a plan." },
+            { type: "tool_use", id: "tool-1", name: "EnterPlanMode", input: {} },
+            { type: "text", text: "## Implementation Plan\n\n1. First step\n2. Second step\n3. Third step" },
+            { type: "tool_use", id: "tool-2", name: "ExitPlanMode", input: {} },
+            { type: "text", text: "Shall I proceed?" },
+          ],
+        },
+      })}\n`,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const planEvent = events.find((e) => e.method === "item/plan/proposed");
+    expect(planEvent).toBeDefined();
+    expect(planEvent?.payload).toEqual({
+      planMarkdown: "## Implementation Plan\n\n1. First step\n2. Second step\n3. Third step",
+    });
+  });
+
+  it("does not emit plan event when no plan tools are present", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess:
+        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-no-plan");
+    const events: ProviderEvent[] = [];
+
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.startSession({
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    await manager.sendTurn({
+      threadId,
+      input: "Hello",
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-no-plan",
+          content: [
+            { type: "text", text: "Hello! How can I help?" },
+          ],
+        },
+      })}\n`,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const planEvent = events.find((e) => e.method === "item/plan/proposed");
+    expect(planEvent).toBeUndefined();
   });
 });

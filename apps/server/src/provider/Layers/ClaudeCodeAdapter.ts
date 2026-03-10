@@ -15,7 +15,7 @@ import {
   ProviderItemId,
   ThreadId,
 } from "@t3tools/contracts";
-import { Effect, Layer, Queue, Stream } from "effect";
+import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import {
   ProviderAdapterProcessError,
@@ -28,8 +28,11 @@ import {
 import { ClaudeCodeAdapter, type ClaudeCodeAdapterShape } from "../Services/ClaudeCodeAdapter.ts";
 import {
   ClaudeCodeManager,
+  type ClaudeCodeImageAttachment,
   type ClaudeCodeStartSessionInput,
 } from "../../claudeCodeManager.ts";
+import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "claudeCode" as const;
@@ -414,6 +417,21 @@ function mapToRuntimeEvents(
     ];
   }
 
+  // Proposed plan from plan mode
+  if (event.method === "item/plan/proposed") {
+    const planMarkdown = asString(payload?.planMarkdown);
+    if (!planMarkdown || planMarkdown.length === 0) return [];
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "turn.proposed.completed",
+        payload: {
+          planMarkdown,
+        },
+      },
+    ];
+  }
+
   // Error from the provider
   if (event.method === "provider/error" || event.method === "error") {
     const message = event.message ?? "Provider runtime error";
@@ -437,6 +455,9 @@ function mapToRuntimeEvents(
 
 const makeClaudeCodeAdapter = (options?: ClaudeCodeAdapterLiveOptions) =>
   Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const serverConfig = yield* Effect.service(ServerConfig);
+
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -496,15 +517,46 @@ const makeClaudeCodeAdapter = (options?: ClaudeCodeAdapterLiveOptions) =>
     };
 
     const sendTurn: ClaudeCodeAdapterShape["sendTurn"] = (input) =>
-      Effect.tryPromise({
-        try: () =>
-          manager.sendTurn({
-            threadId: input.threadId,
-            ...(input.input !== undefined ? { input: input.input } : {}),
-            ...(input.model !== undefined ? { model: input.model } : {}),
-            ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-          }),
-        catch: (cause) => toRequestError(input.threadId, "turn/start", cause),
+      Effect.gen(function* () {
+        const images: ClaudeCodeImageAttachment[] = yield* Effect.forEach(
+          input.attachments ?? [],
+          (attachment) =>
+            Effect.gen(function* () {
+              const attachmentPath = resolveAttachmentPath({
+                stateDir: serverConfig.stateDir,
+                attachment,
+              });
+              if (!attachmentPath) {
+                return yield* toRequestError(
+                  input.threadId,
+                  "turn/start",
+                  new Error(`Invalid attachment id '${attachment.id}'.`),
+                );
+              }
+              const bytes = yield* fileSystem
+                .readFile(attachmentPath)
+                .pipe(
+                  Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)),
+                );
+              return {
+                mediaType: attachment.mimeType,
+                base64Data: Buffer.from(bytes).toString("base64"),
+              };
+            }),
+          { concurrency: 1 },
+        );
+
+        return yield* Effect.tryPromise({
+          try: () =>
+            manager.sendTurn({
+              threadId: input.threadId,
+              ...(input.input !== undefined ? { input: input.input } : {}),
+              ...(input.model !== undefined ? { model: input.model } : {}),
+              ...(images.length > 0 ? { images } : {}),
+              ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+            }),
+          catch: (cause) => toRequestError(input.threadId, "turn/start", cause),
+        });
       }).pipe(
         Effect.map((result) => ({
           ...result,
