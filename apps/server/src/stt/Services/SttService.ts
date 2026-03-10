@@ -1,12 +1,6 @@
 import { Effect, Layer, Schema, ServiceMap } from "effect";
 import type { SttTranscribeInput, SttTranscribeResult } from "@t3tools/contracts";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { writeFile, readFile, unlink, mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-const execFileAsync = promisify(execFile);
+import { spawn } from "node:child_process";
 
 export class SttTranscribeError extends Schema.TaggedErrorClass<SttTranscribeError>()(
   "SttTranscribeError",
@@ -26,26 +20,27 @@ export class SttService extends ServiceMap.Service<SttService, SttServiceShape>(
 const DEFAULT_WHISPER_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions";
 const DEFAULT_WHISPER_MODEL = "whisper-1";
 
-/** Convert audio buffer to 16kHz mono WAV using ffmpeg (required by whisper.cpp). */
-const convertToWav = (audioBuffer: Buffer, mimeType: string): Effect.Effect<Buffer, SttTranscribeError> =>
+/** Convert audio buffer to 16kHz mono WAV via ffmpeg stdin/stdout pipes (no temp files). */
+const convertToWav = (audioBuffer: Buffer): Effect.Effect<Buffer, SttTranscribeError> =>
   Effect.tryPromise({
-    try: async () => {
-      const dir = await mkdtemp(join(tmpdir(), "stt-"));
-      const ext = mimeType.includes("mp4") ? "mp4" : mimeType.includes("ogg") ? "ogg" : "webm";
-      const inputPath = join(dir, `input.${ext}`);
-      const outputPath = join(dir, "output.wav");
-      await writeFile(inputPath, audioBuffer);
-      await execFileAsync("ffmpeg", [
-        "-y", "-i", inputPath,
-        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
-        outputPath,
-      ]);
-      const wav = await readFile(outputPath);
-      // Clean up temp files
-      await unlink(inputPath).catch(() => {});
-      await unlink(outputPath).catch(() => {});
-      return wav;
-    },
+    try: () =>
+      new Promise<Buffer>((resolve, reject) => {
+        const proc = spawn("ffmpeg", [
+          "-i", "pipe:0",
+          "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+          "-f", "wav", "pipe:1",
+        ], { stdio: ["pipe", "pipe", "pipe"] });
+
+        const chunks: Buffer[] = [];
+        proc.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+        proc.on("close", (code) => {
+          if (code === 0) resolve(Buffer.concat(chunks));
+          else reject(new Error(`ffmpeg exited with code ${code}`));
+        });
+        proc.on("error", reject);
+        proc.stdin.write(audioBuffer);
+        proc.stdin.end();
+      }),
     catch: (cause) =>
       new SttTranscribeError({
         message: `Failed to convert audio to WAV: ${String(cause)}`,
@@ -77,7 +72,7 @@ const makeSttService = Effect.succeed(
         // whisper.cpp only accepts WAV — convert if needed
         const needsConversion = !isOpenAi && !input.mimeType.includes("wav");
         const finalBuffer = needsConversion
-          ? yield* convertToWav(audioBuffer, input.mimeType)
+          ? yield* convertToWav(audioBuffer)
           : audioBuffer;
         const finalMime = needsConversion ? "audio/wav" : input.mimeType;
         const finalExt = needsConversion ? "wav" : ext;
