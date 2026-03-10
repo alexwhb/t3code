@@ -52,7 +52,7 @@ const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
-  readonly provider: "codex";
+  readonly provider: ProviderKind;
   readonly createdAt: string;
   readonly threadId: ThreadId;
   readonly turnId?: string | undefined;
@@ -62,19 +62,28 @@ type LegacyProviderRuntimeEvent = {
   readonly [key: string]: unknown;
 };
 
-function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
+function makeFakeCodexAdapter(
+  provider: ProviderKind = "codex",
+  options?: {
+    readonly resolveStartResumeCursor?: (input: ProviderSessionStartInput) => unknown;
+  },
+) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
   const startSession = vi.fn((input: ProviderSessionStartInput) =>
     Effect.sync(() => {
       const now = new Date().toISOString();
+      const resolvedResumeCursor =
+        options?.resolveStartResumeCursor !== undefined
+          ? options.resolveStartResumeCursor(input)
+          : (input.resumeCursor ?? { opaque: `cursor-${String(input.threadId)}` });
       const session: ProviderSession = {
         provider,
         status: "ready",
         runtimeMode: input.runtimeMode,
         threadId: input.threadId,
-        resumeCursor: input.resumeCursor ?? { opaque: `cursor-${String(input.threadId)}` },
+        ...(resolvedResumeCursor !== undefined ? { resumeCursor: resolvedResumeCursor } : {}),
         cwd: input.cwd ?? process.cwd(),
         createdAt: now,
         updatedAt: now,
@@ -636,6 +645,78 @@ routing.layer("ProviderServiceLive routing", (it) => {
         }
       }
 
+    }),
+  );
+
+  it.effect("persists runtime resume cursor updates for later session recovery", () =>
+    Effect.gen(function* () {
+      const codex = makeFakeCodexAdapter("codex", {
+        resolveStartResumeCursor: (input) => input.resumeCursor,
+      });
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed(codex.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["codex"]),
+      };
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const layer = Layer.mergeAll(
+        makeProviderServiceLive().pipe(
+          Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+          Layer.provide(directoryLayer),
+          Layer.provideMerge(AnalyticsService.layerTest),
+        ),
+        runtimeRepositoryLayer,
+        NodeServices.layer,
+      );
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+
+        const session = yield* provider.startSession(asThreadId("thread-runtime-resume"), {
+          provider: "codex",
+          threadId: asThreadId("thread-runtime-resume"),
+          runtimeMode: "full-access",
+        });
+        yield* sleep(20);
+
+        codex.emit({
+          type: "session.started",
+          eventId: asEventId("evt-runtime-resume"),
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          threadId: session.threadId,
+          payload: {
+            resume: {
+              conversationId: "conversation-123",
+            },
+          },
+        });
+        yield* sleep(100);
+
+        yield* codex.stopSession(session.threadId);
+        yield* provider.sendTurn({
+          threadId: session.threadId,
+          input: "hello again",
+          attachments: [],
+        });
+
+        const recoveredStartInput = codex.startSession.mock.calls[1]?.[0];
+        if (recoveredStartInput && typeof recoveredStartInput === "object") {
+          const startPayload = recoveredStartInput as {
+            resumeCursor?: unknown;
+          };
+          assert.deepEqual(startPayload.resumeCursor, {
+            conversationId: "conversation-123",
+          });
+        }
+      }).pipe(Effect.provide(layer));
     }),
   );
 });

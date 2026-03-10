@@ -2,9 +2,15 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
-import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
+import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 
-import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
+import {
+  getSettingsDefaultModel,
+  getSettingsDefaultProvider,
+  MAX_CUSTOM_MODEL_LENGTH,
+  useAppSettings,
+} from "../appSettings";
+import { PROVIDER_OPTIONS } from "../session-logic";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -89,6 +95,7 @@ function SettingsRouteView() {
     Record<ProviderKind, string>
   >({
     codex: "",
+    claudeCode: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -232,6 +239,84 @@ function SettingsRouteView() {
               <p className="mt-4 text-xs text-muted-foreground">
                 Active theme: <span className="font-medium text-foreground">{resolvedTheme}</span>
               </p>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Defaults</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Choose the default provider and model for new threads.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <label htmlFor="default-provider" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Default provider</span>
+                  <select
+                    id="default-provider"
+                    value={getSettingsDefaultProvider(settings) ?? ""}
+                    onChange={(event) => updateSettings({ defaultProvider: event.target.value })}
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="">System default</option>
+                    {PROVIDER_OPTIONS.filter((o) => o.available).map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {PROVIDER_OPTIONS.filter((o) => o.available).map((providerOption) => {
+                  const provider = providerOption.value as ProviderKind;
+                  const modelOptions = getModelOptions(provider);
+                  const currentDefault =
+                    getSettingsDefaultModel(settings, provider) ?? "";
+                  const settingsKey =
+                    provider === "codex" ? "defaultCodexModel" : "defaultClaudeCodeModel";
+
+                  return (
+                    <label key={provider} htmlFor={`default-model-${provider}`} className="block space-y-1">
+                      <span className="text-xs font-medium text-foreground">
+                        Default {providerOption.label} model
+                      </span>
+                      <select
+                        id={`default-model-${provider}`}
+                        value={currentDefault}
+                        onChange={(event) => updateSettings({ [settingsKey]: event.target.value })}
+                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        <option value="">
+                          System default ({getDefaultModel(provider)})
+                        </option>
+                        {modelOptions.map((option) => (
+                          <option key={option.slug} value={option.slug}>
+                            {option.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })}
+
+                {(settings.defaultProvider || settings.defaultCodexModel || settings.defaultClaudeCodeModel) ? (
+                  <div className="flex justify-end">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        updateSettings({
+                          defaultProvider: "",
+                          defaultCodexModel: "",
+                          defaultClaudeCodeModel: "",
+                        })
+                      }
+                    >
+                      Reset defaults
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">

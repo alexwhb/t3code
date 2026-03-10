@@ -8,6 +8,7 @@ const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
+  claudeCode: new Set(getModelOptions("claudeCode").map((option) => option.slug)),
 };
 
 const AppSettingsSchema = Schema.Struct({
@@ -23,6 +24,15 @@ const AppSettingsSchema = Schema.Struct({
   ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
+  ),
+  defaultProvider: Schema.String.check(Schema.isMaxLength(64)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  defaultCodexModel: Schema.String.check(Schema.isMaxLength(256)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  defaultClaudeCodeModel: Schema.String.check(Schema.isMaxLength(256)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
   ),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
@@ -160,6 +170,21 @@ export function getSlashModelOptions(
     const searchName = option.name.toLowerCase();
     return searchSlug.includes(normalizedQuery) || searchName.includes(normalizedQuery);
   });
+}
+
+export function getSettingsDefaultProvider(settings: AppSettings): ProviderKind | null {
+  const value = settings.defaultProvider;
+  if (value === "codex" || value === "claudeCode") return value;
+  return null;
+}
+
+export function getSettingsDefaultModel(
+  settings: AppSettings,
+  provider: ProviderKind,
+): string | null {
+  const value = provider === "codex" ? settings.defaultCodexModel : settings.defaultClaudeCodeModel;
+  if (!value) return null;
+  return normalizeModelSlug(value, provider) ?? null;
 }
 
 function emitChange(): void {

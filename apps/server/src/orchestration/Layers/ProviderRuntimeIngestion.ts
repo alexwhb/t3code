@@ -438,16 +438,19 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      const toolDetail = event.payload.detail ? truncateDetail(event.payload.detail) : undefined;
+      const completedTitle = event.payload.title ?? "Tool";
+      const completedSummary = toolDetail ? `${completedTitle}: ${toolDetail}` : `${completedTitle} complete`;
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "tool",
           kind: "tool.completed",
-          summary: `${event.payload.title ?? "Tool"} complete`,
+          summary: completedSummary,
           payload: {
             itemType: event.payload.itemType,
-            ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(toolDetail ? { detail: toolDetail } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -644,6 +647,8 @@ const make = Effect.gen(function* () {
     commandTag: string;
     finalDeltaCommandTag: string;
     fallbackText?: string;
+    /** When true, skip creating a message if there is no text content (tool-only messages). */
+    skipIfEmpty?: boolean;
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
@@ -653,6 +658,11 @@ const make = Effect.gen(function* () {
           : (input.fallbackText?.trim().length ?? 0) > 0
             ? input.fallbackText!
             : "";
+
+      if (text.length === 0 && input.skipIfEmpty) {
+        yield* clearAssistantMessageState(input.messageId);
+        return;
+      }
 
       if (text.length > 0) {
         yield* orchestrationEngine.dispatch({
@@ -970,6 +980,7 @@ const make = Effect.gen(function* () {
           ...(assistantCompletion.fallbackText !== undefined && shouldApplyFallbackCompletionText
             ? { fallbackText: assistantCompletion.fallbackText }
             : {}),
+          skipIfEmpty: !existingAssistantMessage,
         });
 
         if (turnId) {

@@ -99,27 +99,38 @@ function toRuntimePayloadFromSession(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function readPersistedProviderOptions(
   runtimePayload: ProviderRuntimeBinding["runtimePayload"],
 ): Record<string, unknown> | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+  if (!isRecord(runtimePayload)) {
     return undefined;
   }
   const raw = "providerOptions" in runtimePayload ? runtimePayload.providerOptions : undefined;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  if (!isRecord(raw)) return undefined;
   return raw as Record<string, unknown>;
 }
 
 function readPersistedCwd(
   runtimePayload: ProviderRuntimeBinding["runtimePayload"],
 ): string | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+  if (!isRecord(runtimePayload)) {
     return undefined;
   }
   const rawCwd = "cwd" in runtimePayload ? runtimePayload.cwd : undefined;
   if (typeof rawCwd !== "string") return undefined;
   const trimmed = rawCwd.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readRuntimeResumeCursor(event: ProviderRuntimeEvent): unknown | undefined {
+  if (event.type !== "session.started" || !isRecord(event.payload)) {
+    return undefined;
+  }
+  return "resume" in event.payload ? event.payload.resume : undefined;
 }
 
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
@@ -168,8 +179,34 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       registry.getByProvider(provider),
     );
 
+    const persistRuntimeBindingUpdate = (event: ProviderRuntimeEvent): Effect.Effect<void> => {
+      const resumeCursor = readRuntimeResumeCursor(event);
+      if (resumeCursor === undefined) {
+        return Effect.void;
+      }
+
+      return directory.upsert({
+        threadId: event.threadId,
+        provider: event.provider,
+        resumeCursor,
+        runtimePayload: {
+          lastRuntimeEvent: event.type,
+          lastRuntimeEventAt: event.createdAt,
+        },
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to persist provider runtime binding update", {
+            threadId: event.threadId,
+            provider: event.provider,
+            eventType: event.type,
+            cause,
+          }),
+        ),
+      );
+    };
+
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-      publishRuntimeEvent(event);
+      publishRuntimeEvent(event).pipe(Effect.flatMap(() => persistRuntimeBindingUpdate(event)));
 
     const worker = Effect.forever(
       Queue.take(runtimeEventQueue).pipe(Effect.flatMap(processRuntimeEvent)),
@@ -292,7 +329,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
 
         yield* upsertSessionBinding(session, threadId, {
-          ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+          providerOptions: input.providerOptions,
         });
         yield* analytics.record("provider.session.started", {
           provider: session.provider,
