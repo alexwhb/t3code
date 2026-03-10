@@ -904,8 +904,6 @@ const make = Effect.gen(function* () {
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
-      const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
-
       const shouldApplyThreadLifecycle = (() => {
         if (!STRICT_PROVIDER_LIFECYCLE_GUARD) {
           return true;
@@ -919,14 +917,16 @@ const make = Effect.gen(function* () {
           case "turn.started":
             return !conflictsWithActiveTurn;
           case "turn.completed":
-            if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
+            if (conflictsWithActiveTurn) {
               return false;
             }
             // Only the active turn may close the lifecycle state.
             if (activeTurnId !== null && eventTurnId !== undefined) {
               return sameId(activeTurnId, eventTurnId);
             }
-            // If no active turn is tracked, accept completion scoped to this thread.
+            // Some providers only scope completion to the thread. Accept those
+            // events so dead-session interrupts do not leave the thread wedged
+            // in a running state.
             return true;
           default:
             return true;
