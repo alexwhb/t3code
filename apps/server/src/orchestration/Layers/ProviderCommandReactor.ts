@@ -274,7 +274,9 @@ const make = Effect.gen(function* () {
           ? "in-session"
           : (yield* providerService.getCapabilities(currentProvider)).sessionModelSwitch;
       const modelChanged =
-        options?.model !== undefined && options.model !== activeSession?.model;
+        activeSession !== undefined &&
+        options?.model !== undefined &&
+        options.model !== activeSession.model;
       const shouldRestartForModelChange =
         modelChanged && sessionModelSwitch === "restart-session";
 

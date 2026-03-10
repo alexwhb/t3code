@@ -313,11 +313,33 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
 
+        const provider = parsed.provider ?? "codex";
+
+        // When the caller doesn't supply a resumeCursor, check for a persisted
+        // binding so that restarted sessions automatically resume where the
+        // previous provider session left off (e.g. after an app restart).
+        let resolvedResumeCursor = parsed.resumeCursor;
+        if (resolvedResumeCursor === undefined) {
+          const bindingOption = yield* directory.getBinding(threadId).pipe(
+            Effect.orElseSucceed(() => Option.none<ProviderRuntimeBinding>()),
+          );
+          const binding = Option.getOrUndefined(bindingOption);
+          if (
+            binding?.resumeCursor !== null &&
+            binding?.resumeCursor !== undefined &&
+            binding.provider === provider
+          ) {
+            resolvedResumeCursor = binding.resumeCursor;
+          }
+        }
+
         const input = {
           ...parsed,
           threadId,
-          provider: parsed.provider ?? "codex",
+          provider,
+          ...(resolvedResumeCursor !== undefined ? { resumeCursor: resolvedResumeCursor } : {}),
         };
+
         const adapter = yield* registry.getByProvider(input.provider);
         const session = yield* adapter.startSession(input);
 
