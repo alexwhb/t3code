@@ -22,6 +22,8 @@ export interface AppState {
   projects: Project[];
   threads: Thread[];
   threadsHydrated: boolean;
+  /** Per-project custom thread ordering. Key = project cwd, value = ordered thread IDs. */
+  threadOrderByProjectCwd: Record<string, string[]>;
 }
 
 const PERSISTED_STATE_KEY = "t3code:renderer-state:v8";
@@ -41,9 +43,11 @@ const initialState: AppState = {
   projects: [],
   threads: [],
   threadsHydrated: false,
+  threadOrderByProjectCwd: {},
 };
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
+let persistedThreadOrderByProjectCwd: Record<string, string[]> = {};
 
 // ── Persist helpers ──────────────────────────────────────────────────
 
@@ -55,6 +59,7 @@ function readPersistedState(): AppState {
     const parsed = JSON.parse(raw) as {
       expandedProjectCwds?: string[];
       projectOrderCwds?: string[];
+      threadOrderByProjectCwd?: Record<string, string[]>;
     };
     persistedExpandedProjectCwds.clear();
     persistedProjectOrderCwds.length = 0;
@@ -68,7 +73,10 @@ function readPersistedState(): AppState {
         persistedProjectOrderCwds.push(cwd);
       }
     }
-    return { ...initialState };
+    if (parsed.threadOrderByProjectCwd && typeof parsed.threadOrderByProjectCwd === "object") {
+      persistedThreadOrderByProjectCwd = parsed.threadOrderByProjectCwd;
+    }
+    return { ...initialState, threadOrderByProjectCwd: persistedThreadOrderByProjectCwd };
   } catch {
     return initialState;
   }
@@ -86,6 +94,7 @@ function persistState(state: AppState): void {
           .filter((project) => project.expanded)
           .map((project) => project.cwd),
         projectOrderCwds: state.projects.map((project) => project.cwd),
+        threadOrderByProjectCwd: state.threadOrderByProjectCwd,
       }),
     );
     if (!legacyKeysCleanedUp) {
@@ -405,6 +414,62 @@ export function reorderProjects(
   return { ...state, projects };
 }
 
+export function reorderThreads(
+  state: AppState,
+  projectCwd: string,
+  draggedThreadId: ThreadId,
+  targetThreadId: ThreadId,
+): AppState {
+  if (draggedThreadId === targetThreadId) return state;
+  // Build the current ordered list of thread IDs for this project
+  const projectThreads = state.threads.filter((t) => {
+    const project = state.projects.find((p) => p.id === t.projectId);
+    return project?.cwd === projectCwd;
+  });
+  const existingOrder = state.threadOrderByProjectCwd[projectCwd];
+  const orderedIds = applyThreadOrder(
+    projectThreads.map((t) => t.id),
+    existingOrder,
+  );
+  const draggedIndex = orderedIds.indexOf(draggedThreadId);
+  const targetIndex = orderedIds.indexOf(targetThreadId);
+  if (draggedIndex < 0 || targetIndex < 0) return state;
+  const next = [...orderedIds];
+  next.splice(draggedIndex, 1);
+  next.splice(targetIndex, 0, draggedThreadId);
+  return {
+    ...state,
+    threadOrderByProjectCwd: { ...state.threadOrderByProjectCwd, [projectCwd]: next },
+  };
+}
+
+/**
+ * Apply a persisted thread order to a list of thread IDs.
+ * Threads in the saved order come first (in saved order), followed by
+ * any new threads not yet in the saved order (preserving their original order).
+ */
+export function applyThreadOrder(
+  threadIds: string[],
+  savedOrder: string[] | undefined,
+): string[] {
+  if (!savedOrder || savedOrder.length === 0) return threadIds;
+  const idSet = new Set(threadIds);
+  const ordered: string[] = [];
+  for (const id of savedOrder) {
+    if (idSet.has(id)) {
+      ordered.push(id);
+      idSet.delete(id);
+    }
+  }
+  // Append any threads not in the saved order (new threads)
+  for (const id of threadIds) {
+    if (idSet.has(id)) {
+      ordered.push(id);
+    }
+  }
+  return ordered;
+}
+
 export function setError(state: AppState, threadId: ThreadId, error: string | null): AppState {
   const threads = updateThread(state.threads, threadId, (t) => {
     if (t.error === error) return t;
@@ -441,6 +506,7 @@ interface AppStore extends AppState {
   toggleProject: (projectId: Project["id"]) => void;
   setProjectExpanded: (projectId: Project["id"], expanded: boolean) => void;
   reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
+  reorderThreads: (projectCwd: string, draggedThreadId: ThreadId, targetThreadId: ThreadId) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadBranch: (threadId: ThreadId, branch: string | null, worktreePath: string | null) => void;
 }
@@ -456,6 +522,8 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => setProjectExpanded(state, projectId, expanded)),
   reorderProjects: (draggedProjectId, targetProjectId) =>
     set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
+  reorderThreads: (projectCwd, draggedThreadId, targetThreadId) =>
+    set((state) => reorderThreads(state, projectCwd, draggedThreadId, targetThreadId)),
   setError: (threadId, error) => set((state) => setError(state, threadId, error)),
   setThreadBranch: (threadId, branch, worktreePath) =>
     set((state) => setThreadBranch(state, threadId, branch, worktreePath)),

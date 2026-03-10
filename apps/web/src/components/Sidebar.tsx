@@ -41,7 +41,7 @@ import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL } from "../branding";
 import { newCommandId, newProjectId, newThreadId } from "../lib/utils";
-import { useStore } from "../store";
+import { applyThreadOrder, useStore } from "../store";
 import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
@@ -222,7 +222,35 @@ function ProjectFavicon({ cwd }: { cwd: string }) {
   );
 }
 
-type SortableProjectHandleProps = Pick<ReturnType<typeof useSortable>, "attributes" | "listeners">;
+type SortableDragHandleProps = Pick<ReturnType<typeof useSortable>, "attributes" | "listeners">;
+
+type SortableProjectHandleProps = SortableDragHandleProps;
+
+function SortableThreadItem({
+  threadId,
+  children,
+}: {
+  threadId: ThreadId;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, isOver } =
+    useSortable({ id: threadId });
+  return (
+    <li
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition,
+      }}
+      className={`w-full ${isDragging ? "z-20 opacity-80" : ""} ${isOver && !isDragging ? "ring-1 ring-primary/40 rounded-md" : ""}`}
+      data-slot="sidebar-menu-sub-item"
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </li>
+  );
+}
 
 function SortableProjectItem({
   projectId,
@@ -257,6 +285,8 @@ export default function Sidebar() {
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
   const reorderProjects = useStore((store) => store.reorderProjects);
+  const reorderThreads = useStore((store) => store.reorderThreads);
+  const threadOrderByProjectCwd = useStore((store) => store.threadOrderByProjectCwd);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearThreadDraft);
   const getDraftThreadByProjectId = useComposerDraftStore(
     (store) => store.getDraftThreadByProjectId,
@@ -840,6 +870,21 @@ export default function Sidebar() {
     ],
   );
 
+  const threadDnDSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+  );
+
+  const handleThreadDragEnd = useCallback(
+    (event: DragEndEvent, projectCwd: string) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      reorderThreads(projectCwd, active.id as ThreadId, over.id as ThreadId);
+    },
+    [reorderThreads],
+  );
+
   const projectDnDSensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
@@ -1264,13 +1309,22 @@ export default function Sidebar() {
                 strategy={verticalListSortingStrategy}
               >
                 {projects.map((project) => {
-                  const projectThreads = threads
+                  const defaultSortedThreads = threads
                     .filter((thread) => thread.projectId === project.id)
                     .toSorted((a, b) => {
                       const byDate = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
                       if (byDate !== 0) return byDate;
                       return b.id.localeCompare(a.id);
                     });
+                  const savedOrder = threadOrderByProjectCwd[project.cwd];
+                  const orderedThreadIds = applyThreadOrder(
+                    defaultSortedThreads.map((t) => t.id),
+                    savedOrder,
+                  );
+                  const threadById = new Map(defaultSortedThreads.map((t) => [t.id, t]));
+                  const projectThreads = orderedThreadIds
+                    .map((id) => threadById.get(id as ThreadId))
+                    .filter((t): t is NonNullable<typeof t> => t != null);
                   const isThreadListExpanded = expandedThreadListsByProject.has(project.id);
                   const hasHiddenThreads = projectThreads.length > THREAD_PREVIEW_LIMIT;
                   const visibleThreads =
@@ -1344,6 +1398,16 @@ export default function Sidebar() {
 
                           <CollapsibleContent keepMounted>
                             <SidebarMenuSub className="mx-1 my-0 w-full translate-x-0 gap-0 px-1.5 py-0">
+                              <DndContext
+                                sensors={threadDnDSensors}
+                                collisionDetection={closestCorners}
+                                modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                                onDragEnd={(event) => handleThreadDragEnd(event, project.cwd)}
+                              >
+                              <SortableContext
+                                items={visibleThreads.map((t) => t.id)}
+                                strategy={verticalListSortingStrategy}
+                              >
                                 {visibleThreads.map((thread) => {
                                   const isActive = routeThreadId === thread.id;
                                   const threadStatus = resolveThreadStatusPill({
@@ -1358,7 +1422,7 @@ export default function Sidebar() {
                                   );
 
                                   return (
-                                    <SidebarMenuSubItem key={thread.id} className="w-full">
+                                    <SortableThreadItem key={thread.id} threadId={thread.id}>
                                       <SidebarMenuSubButton
                                         render={<div role="button" tabIndex={0} />}
                                         size="sm"
@@ -1481,9 +1545,11 @@ export default function Sidebar() {
                                           </span>
                                         </div>
                                       </SidebarMenuSubButton>
-                                    </SidebarMenuSubItem>
+                                    </SortableThreadItem>
                                   );
                                 })}
+                              </SortableContext>
+                              </DndContext>
 
                                 {hasHiddenThreads && !isThreadListExpanded && (
                                   <SidebarMenuSubItem className="w-full">
