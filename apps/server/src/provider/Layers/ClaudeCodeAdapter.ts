@@ -502,6 +502,7 @@ const makeClaudeCodeAdapter = (options?: ClaudeCodeAdapterLiveOptions) =>
             threadId: input.threadId,
             ...(input.input !== undefined ? { input: input.input } : {}),
             ...(input.model !== undefined ? { model: input.model } : {}),
+            ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
           }),
         catch: (cause) => toRequestError(input.threadId, "turn/start", cause),
       }).pipe(

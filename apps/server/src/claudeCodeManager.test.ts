@@ -91,6 +91,32 @@ describe("buildClaudeArgs", () => {
     expect(args).not.toContain("--continue");
     expect(args).not.toContain("--conversation-id");
   });
+
+  it("uses --permission-mode plan when interactionMode is plan", () => {
+    const args = buildClaudeArgs({
+      model: "sonnet",
+      runtimeMode: "full-access",
+      interactionMode: "plan",
+      prompt: "Plan how to refactor this",
+    });
+
+    expect(args).toContain("--permission-mode");
+    expect(args).toContain("plan");
+    // Plan mode takes precedence over --dangerously-skip-permissions
+    expect(args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("does not add --permission-mode when interactionMode is default", () => {
+    const args = buildClaudeArgs({
+      model: "sonnet",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      prompt: "Do something",
+    });
+
+    expect(args).not.toContain("--permission-mode");
+    expect(args).toContain("--dangerously-skip-permissions");
+  });
 });
 
 describe("ClaudeCodeManager", () => {

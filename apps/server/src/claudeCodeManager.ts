@@ -14,6 +14,7 @@ import {
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
+  type ProviderInteractionMode,
   type ProviderSession,
   type ProviderSessionStartInput,
   type ProviderTurnStartResult,
@@ -87,6 +88,7 @@ export interface ClaudeCodeSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
   readonly model?: string;
+  readonly interactionMode?: ProviderInteractionMode;
 }
 
 export interface ClaudeCodeThreadTurnSnapshot {
@@ -195,6 +197,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
     const args = buildClaudeArgs({
       model,
       runtimeMode: context.session.runtimeMode,
+      ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       resumeCursor: context.conversationId
         ? { conversationId: context.conversationId }
         : undefined,
@@ -921,6 +924,7 @@ function mapToolType(toolName: string | undefined): string {
 export function buildClaudeArgs(input: {
   model: string;
   runtimeMode: RuntimeMode;
+  interactionMode?: ProviderInteractionMode;
   resumeCursor?: unknown;
   prompt?: string;
 }): string[] {
@@ -930,8 +934,11 @@ export function buildClaudeArgs(input: {
     "--model", input.model,
   ];
 
-  // Handle permissions based on runtime mode
-  if (input.runtimeMode === "full-access") {
+  // Handle permissions based on runtime mode and interaction mode.
+  // Plan mode uses --permission-mode plan which takes precedence.
+  if (input.interactionMode === "plan") {
+    args.push("--permission-mode", "plan");
+  } else if (input.runtimeMode === "full-access") {
     args.push("--dangerously-skip-permissions");
   }
 
