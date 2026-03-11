@@ -133,7 +133,9 @@ function mapProjectsFromReadModel(
   const previousById = new Map(previous.map((project) => [project.id, project] as const));
   const previousByCwd = new Map(previous.map((project) => [project.cwd, project] as const));
   const previousOrderById = new Map(previous.map((project, index) => [project.id, index] as const));
-  const previousOrderByCwd = new Map(previous.map((project, index) => [project.cwd, index] as const));
+  const previousOrderByCwd = new Map(
+    previous.map((project, index) => [project.cwd, index] as const),
+  );
   const persistedOrderByCwd = new Map(
     persistedProjectOrderCwds.map((cwd, index) => [cwd, index] as const),
   );
@@ -159,7 +161,8 @@ function mapProjectsFromReadModel(
 
   return mappedProjects
     .map((project, incomingIndex) => {
-      const previousIndex = previousOrderById.get(project.id) ?? previousOrderByCwd.get(project.cwd);
+      const previousIndex =
+        previousOrderById.get(project.id) ?? previousOrderByCwd.get(project.cwd);
       const persistedIndex = usePersistedOrder ? persistedOrderByCwd.get(project.cwd) : undefined;
       const orderIndex =
         previousIndex ??
