@@ -16,16 +16,14 @@ afterEach(() => {
 });
 
 function makeSpawnSyncSuccess(): NonNullable<ClaudeCodeManagerOptions["spawnSyncProcess"]> {
-  return vi.fn(() =>
-    ({
-      pid: 1,
-      output: [],
-      stdout: "2.1.70 (Claude Code)",
-      stderr: "",
-      status: 0,
-      signal: null,
-    }),
-  ) as NonNullable<ClaudeCodeManagerOptions["spawnSyncProcess"]>;
+  return vi.fn(() => ({
+    pid: 1,
+    output: [],
+    stdout: "2.1.70 (Claude Code)",
+    stderr: "",
+    status: 0,
+    signal: null,
+  })) as NonNullable<ClaudeCodeManagerOptions["spawnSyncProcess"]>;
 }
 
 type FakeChildProcess = EventEmitter &
@@ -107,7 +105,6 @@ describe("buildClaudeArgs", () => {
     expect(args).not.toContain("Describe this image");
   });
 
-
   it("uses --permission-mode plan when interactionMode is plan", () => {
     const args = buildClaudeArgs({
       model: "sonnet",
@@ -138,8 +135,9 @@ describe("buildClaudeArgs", () => {
 describe("ClaudeCodeManager", () => {
   it("closes stdin after spawning a print-mode turn", async () => {
     const child = makeFakeChildProcess();
-    const spawnProcess =
-      vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>;
+    const spawnProcess = vi.fn(() => child) as NonNullable<
+      ClaudeCodeManagerOptions["spawnProcess"]
+    >;
     const manager = new ClaudeCodeManager({
       spawnProcess,
       spawnSyncProcess: makeSpawnSyncSuccess(),
@@ -172,8 +170,9 @@ describe("ClaudeCodeManager", () => {
       return originalWrite(data);
     }) as typeof child.stdin.write);
 
-    const spawnProcess =
-      vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>;
+    const spawnProcess = vi.fn(() => child) as NonNullable<
+      ClaudeCodeManagerOptions["spawnProcess"]
+    >;
     const manager = new ClaudeCodeManager({
       spawnProcess,
       spawnSyncProcess: makeSpawnSyncSuccess(),
@@ -188,9 +187,7 @@ describe("ClaudeCodeManager", () => {
     await manager.sendTurn({
       threadId,
       input: "What is in this image?",
-      images: [
-        { mediaType: "image/png", base64Data: "iVBOR..." },
-      ],
+      images: [{ mediaType: "image/png", base64Data: "iVBOR..." }],
     });
 
     expect(spawnProcess).toHaveBeenCalledTimes(1);
@@ -219,8 +216,7 @@ describe("ClaudeCodeManager", () => {
   it("keeps the logical session ready after a successful turn process exits", async () => {
     const child = makeFakeChildProcess();
     const manager = new ClaudeCodeManager({
-      spawnProcess:
-        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
       spawnSyncProcess: makeSpawnSyncSuccess(),
     });
     const threadId = ThreadId.makeUnsafe("thread-successful-exit");
@@ -240,9 +236,7 @@ describe("ClaudeCodeManager", () => {
       input: "Reply with OK",
     });
 
-    child.stdout.write(
-      `${JSON.stringify({ type: "system", session_id: "session-123" })}\n`,
-    );
+    child.stdout.write(`${JSON.stringify({ type: "system", session_id: "session-123" })}\n`);
     child.stdout.write(
       `${JSON.stringify({
         type: "assistant",
@@ -276,11 +270,10 @@ describe("ClaudeCodeManager", () => {
     expect(events.some((event) => event.method === "session/exited")).toBe(false);
   });
 
-  it("emits item/plan/proposed when assistant response contains EnterPlanMode tool", async () => {
+  it("emits item/plan/proposed when assistant response contains ExitPlanMode with a plan", async () => {
     const child = makeFakeChildProcess();
     const manager = new ClaudeCodeManager({
-      spawnProcess:
-        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
       spawnSyncProcess: makeSpawnSyncSuccess(),
     });
     const threadId = ThreadId.makeUnsafe("thread-plan-mode");
@@ -306,10 +299,15 @@ describe("ClaudeCodeManager", () => {
         message: {
           id: "msg-plan-1",
           content: [
-            { type: "text", text: "Let me create a plan." },
             { type: "tool_use", id: "tool-1", name: "EnterPlanMode", input: {} },
-            { type: "text", text: "## Implementation Plan\n\n1. First step\n2. Second step\n3. Third step" },
-            { type: "tool_use", id: "tool-2", name: "ExitPlanMode", input: {} },
+            {
+              type: "tool_use",
+              id: "tool-2",
+              name: "ExitPlanMode",
+              input: {
+                plan: "## Implementation Plan\n\n1. First step\n2. Second step\n3. Third step",
+              },
+            },
             { type: "text", text: "Shall I proceed?" },
           ],
         },
@@ -328,8 +326,7 @@ describe("ClaudeCodeManager", () => {
   it("does not emit plan event when no plan tools are present", async () => {
     const child = makeFakeChildProcess();
     const manager = new ClaudeCodeManager({
-      spawnProcess:
-        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
       spawnSyncProcess: makeSpawnSyncSuccess(),
     });
     const threadId = ThreadId.makeUnsafe("thread-no-plan");
@@ -354,9 +351,7 @@ describe("ClaudeCodeManager", () => {
         type: "assistant",
         message: {
           id: "msg-no-plan",
-          content: [
-            { type: "text", text: "Hello! How can I help?" },
-          ],
+          content: [{ type: "text", text: "Hello! How can I help?" }],
         },
       })}\n`,
     );
@@ -367,11 +362,10 @@ describe("ClaudeCodeManager", () => {
     expect(planEvent).toBeUndefined();
   });
 
-  it("emits item/plan/proposed from full assistant text when interactionMode is plan and no tool blocks", async () => {
+  it("does not emit plan event from plain assistant text when interactionMode is plan", async () => {
     const child = makeFakeChildProcess();
     const manager = new ClaudeCodeManager({
-      spawnProcess:
-        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
       spawnSyncProcess: makeSpawnSyncSuccess(),
     });
     const threadId = ThreadId.makeUnsafe("thread-plan-fallback");
@@ -408,17 +402,78 @@ describe("ClaudeCodeManager", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const planEvent = events.find((e) => e.method === "item/plan/proposed");
-    expect(planEvent).toBeDefined();
-    expect(planEvent?.payload).toEqual({
-      planMarkdown: "## Refactor Plan\n\n1. Extract shared logic\n2. Add tests",
+    expect(planEvent).toBeUndefined();
+  });
+
+  it("does not emit plan event when Claude asks a follow-up question in plan mode", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
     });
+    const threadId = ThreadId.makeUnsafe("thread-plan-question");
+    const events: ProviderEvent[] = [];
+
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.startSession({
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    await manager.sendTurn({
+      threadId,
+      input: "What happens if we delete the thread?",
+      interactionMode: "plan",
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-plan-question",
+          content: [
+            { type: "tool_use", id: "tool-1", name: "EnterPlanMode", input: {} },
+            {
+              type: "text",
+              text: "The pinned note will not go away. It becomes orphaned.",
+            },
+            {
+              type: "tool_use",
+              id: "tool-2",
+              name: "AskUserQuestion",
+              input: {
+                questions: [
+                  {
+                    question: "Which approach do you prefer?",
+                    header: "Cleanup",
+                    options: [
+                      {
+                        label: "Clean up on delete",
+                        description: "Remove pinned notes when their source thread is deleted.",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      })}\n`,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const planEvent = events.find((e) => e.method === "item/plan/proposed");
+    expect(planEvent).toBeUndefined();
   });
 
   it("does not emit plan event for plain text when interactionMode is default", async () => {
     const child = makeFakeChildProcess();
     const manager = new ClaudeCodeManager({
-      spawnProcess:
-        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
       spawnSyncProcess: makeSpawnSyncSuccess(),
     });
     const threadId = ThreadId.makeUnsafe("thread-default-no-plan");
@@ -444,9 +499,7 @@ describe("ClaudeCodeManager", () => {
         type: "assistant",
         message: {
           id: "msg-default",
-          content: [
-            { type: "text", text: "Hi there, how can I help?" },
-          ],
+          content: [{ type: "text", text: "Hi there, how can I help?" }],
         },
       })}\n`,
     );
