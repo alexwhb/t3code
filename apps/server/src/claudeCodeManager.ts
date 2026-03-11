@@ -6,6 +6,8 @@ import {
 } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import readline from "node:readline";
 
 import {
@@ -38,6 +40,16 @@ interface ClaudeCodeSessionContext {
   currentInteractionMode: ProviderInteractionMode | null;
   assistantTextBuffer: string;
   binaryPath: string;
+  /** Whether we're currently inside EnterPlanMode/ExitPlanMode boundaries (persists across assistant events). */
+  planModeActive: boolean;
+  /** Text collected between EnterPlanMode and ExitPlanMode boundaries across assistant events. */
+  planTextParts: string[];
+  /** Whether a proposed plan was already emitted for the current turn (from tool boundaries). */
+  planProposedEmitted: boolean;
+  /** Plan markdown extracted from a Write tool call to .claude/plans/. */
+  planFileMarkdown: string | null;
+  /** Path to the plan file detected from Write or Edit tool calls to .claude/plans/. */
+  planFilePath: string | null;
 }
 
 interface PendingApprovalRequest {
@@ -162,6 +174,11 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
         currentInteractionMode: null,
         assistantTextBuffer: "",
         binaryPath,
+        planModeActive: false,
+        planTextParts: [],
+        planProposedEmitted: false,
+        planFileMarkdown: null,
+        planFilePath: null,
       };
 
       this.sessions.set(threadId, ctx);
@@ -195,6 +212,11 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
     context.currentTurnId = turnId;
     context.currentInteractionMode = input.interactionMode ?? null;
     context.assistantTextBuffer = "";
+    context.planModeActive = false;
+    context.planTextParts = [];
+    context.planProposedEmitted = false;
+    context.planFileMarkdown = null;
+    context.planFilePath = null;
 
     // Claude Code CLI runs one-shot per turn with --print.
     // For follow-up turns, we use --continue to resume the conversation.
@@ -589,9 +611,6 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
         });
 
         // Emit content blocks as deltas
-        let planModeActive = false;
-        const planTextParts: string[] = [];
-
         for (const block of content) {
           const b = asObject(block);
           if (!b) continue;
@@ -601,11 +620,27 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
             const toolName = asString(b.name);
             const toolNameLower = toolName?.toLowerCase();
 
-            // Track plan mode boundaries
+            // Track plan mode boundaries (persisted on context across assistant events)
             if (toolNameLower === "enterplanmode") {
-              planModeActive = true;
+              context.planModeActive = true;
             } else if (toolNameLower === "exitplanmode") {
-              planModeActive = false;
+              context.planModeActive = false;
+            }
+
+            // Detect plan file writes/edits (e.g. Write/Edit to .claude/plans/*.md)
+            if (toolNameLower === "write" || toolNameLower === "edit") {
+              const toolInput = asObject(b.input);
+              const filePath = asString(toolInput?.file_path);
+              if (filePath && /[/\\]\.claude[/\\]plans[/\\]/.test(filePath)) {
+                context.planFilePath = filePath;
+                // For Write we can capture full content directly; Edit only has old/new strings
+                if (toolNameLower === "write") {
+                  const fileContent = asString(toolInput?.content);
+                  if (fileContent) {
+                    context.planFileMarkdown = fileContent;
+                  }
+                }
+              }
             }
 
             const toolId = asString(b.id);
@@ -641,8 +676,8 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
             context.assistantTextBuffer += text;
 
             // Collect text produced while in plan mode
-            if (planModeActive) {
-              planTextParts.push(text);
+            if (context.planModeActive) {
+              context.planTextParts.push(text);
             }
 
             this.emitEvent({
@@ -687,17 +722,12 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
           }
         }
 
-        // Emit proposed plan if plan mode text was captured.
-        // Primary: tool-boundary detection (EnterPlanMode/ExitPlanMode).
-        // Fallback: when interactionMode is "plan", treat all assistant text as the plan.
-        const planMarkdown = planTextParts.join("").trim();
-        const effectivePlanMarkdown =
-          planMarkdown.length > 0
-            ? planMarkdown
-            : context.currentInteractionMode === "plan"
-              ? context.assistantTextBuffer.trim()
-              : "";
-        if (effectivePlanMarkdown.length > 0) {
+        // Emit proposed plan if plan text was captured via tool boundaries
+        // (EnterPlanMode/ExitPlanMode). The fallback for plan mode without
+        // boundaries is deferred to turn completion (result event).
+        const planMarkdown = context.planTextParts.join("").trim();
+        if (planMarkdown.length > 0 && !context.planProposedEmitted) {
+          context.planProposedEmitted = true;
           this.emitEvent({
             id: EventId.makeUnsafe(randomUUID()),
             kind: "notification",
@@ -706,7 +736,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
             createdAt: now,
             method: "item/plan/proposed",
             turnId,
-            payload: { planMarkdown: effectivePlanMarkdown },
+            payload: { planMarkdown },
           });
         }
 
@@ -885,6 +915,38 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
           this.updateSession(context, {
             resumeCursor: { conversationId },
           });
+        }
+
+        // Fallback: when interactionMode is "plan" but no plan was emitted
+        // via tool boundaries, emit the plan. Prefer content written to
+        // .claude/plans/*.md (the canonical plan file), falling back to
+        // the full assistant text buffer as a last resort.
+        // When the plan file was edited (not written from scratch), read
+        // the updated content from disk.
+        if (context.currentInteractionMode === "plan" && !context.planProposedEmitted) {
+          let planFromFile = context.planFileMarkdown?.trim();
+          if (!planFromFile && context.planFilePath) {
+            try {
+              const absPath = resolve(context.session.cwd ?? process.cwd(), context.planFilePath);
+              planFromFile = readFileSync(absPath, "utf-8").trim();
+            } catch {
+              // File may have been removed or unreadable – fall through
+            }
+          }
+          const fallbackMarkdown = planFromFile || context.assistantTextBuffer.trim();
+          if (fallbackMarkdown.length > 0) {
+            context.planProposedEmitted = true;
+            this.emitEvent({
+              id: EventId.makeUnsafe(randomUUID()),
+              kind: "notification",
+              provider: "claudeCode",
+              threadId,
+              createdAt: now,
+              method: "item/plan/proposed",
+              turnId,
+              payload: { planMarkdown: fallbackMarkdown },
+            });
+          }
         }
 
         this.updateSession(context, {
