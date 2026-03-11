@@ -366,4 +366,94 @@ describe("ClaudeCodeManager", () => {
     const planEvent = events.find((e) => e.method === "item/plan/proposed");
     expect(planEvent).toBeUndefined();
   });
+
+  it("emits item/plan/proposed from full assistant text when interactionMode is plan and no tool blocks", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess:
+        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-plan-fallback");
+    const events: ProviderEvent[] = [];
+
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.startSession({
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    // Send turn with interactionMode: "plan" — no tool blocks in response
+    await manager.sendTurn({
+      threadId,
+      input: "Plan the refactor",
+      interactionMode: "plan",
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-plan-fallback",
+          content: [
+            { type: "text", text: "## Refactor Plan\n\n1. Extract shared logic\n2. Add tests" },
+          ],
+        },
+      })}\n`,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const planEvent = events.find((e) => e.method === "item/plan/proposed");
+    expect(planEvent).toBeDefined();
+    expect(planEvent?.payload).toEqual({
+      planMarkdown: "## Refactor Plan\n\n1. Extract shared logic\n2. Add tests",
+    });
+  });
+
+  it("does not emit plan event for plain text when interactionMode is default", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess:
+        vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-default-no-plan");
+    const events: ProviderEvent[] = [];
+
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.startSession({
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    await manager.sendTurn({
+      threadId,
+      input: "Hello",
+      interactionMode: "default",
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-default",
+          content: [
+            { type: "text", text: "Hi there, how can I help?" },
+          ],
+        },
+      })}\n`,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const planEvent = events.find((e) => e.method === "item/plan/proposed");
+    expect(planEvent).toBeUndefined();
+  });
 });

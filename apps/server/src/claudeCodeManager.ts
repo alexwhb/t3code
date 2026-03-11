@@ -35,6 +35,7 @@ interface ClaudeCodeSessionContext {
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   stopping: boolean;
   currentTurnId: TurnId | null;
+  currentInteractionMode: ProviderInteractionMode | null;
   assistantTextBuffer: string;
   binaryPath: string;
 }
@@ -158,6 +159,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
         pendingApprovals: new Map(),
         stopping: false,
         currentTurnId: null,
+        currentInteractionMode: null,
         assistantTextBuffer: "",
         binaryPath,
       };
@@ -191,6 +193,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
 
     const turnId = TurnId.makeUnsafe(randomUUID());
     context.currentTurnId = turnId;
+    context.currentInteractionMode = input.interactionMode ?? null;
     context.assistantTextBuffer = "";
 
     // Claude Code CLI runs one-shot per turn with --print.
@@ -684,9 +687,17 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
           }
         }
 
-        // Emit proposed plan if plan mode text was captured
+        // Emit proposed plan if plan mode text was captured.
+        // Primary: tool-boundary detection (EnterPlanMode/ExitPlanMode).
+        // Fallback: when interactionMode is "plan", treat all assistant text as the plan.
         const planMarkdown = planTextParts.join("").trim();
-        if (planMarkdown.length > 0) {
+        const effectivePlanMarkdown =
+          planMarkdown.length > 0
+            ? planMarkdown
+            : context.currentInteractionMode === "plan"
+              ? context.assistantTextBuffer.trim()
+              : "";
+        if (effectivePlanMarkdown.length > 0) {
           this.emitEvent({
             id: EventId.makeUnsafe(randomUUID()),
             kind: "notification",
@@ -695,7 +706,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
             createdAt: now,
             method: "item/plan/proposed",
             turnId,
-            payload: { planMarkdown },
+            payload: { planMarkdown: effectivePlanMarkdown },
           });
         }
 
