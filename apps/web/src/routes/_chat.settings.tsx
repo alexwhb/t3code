@@ -17,9 +17,11 @@ import { useTheme } from "../hooks/useTheme";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
 import { preferredTerminalEditor } from "../terminal-links";
+import { DEFAULT_PLAN_REVIEW_PROMPT } from "../proposedPlan";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
+import { Textarea } from "../components/ui/textarea";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const THEME_OPTIONS = [
@@ -240,6 +242,24 @@ function SettingsRouteView() {
               <p className="mt-4 text-xs text-muted-foreground">
                 Active theme: <span className="font-medium text-foreground">{resolvedTheme}</span>
               </p>
+
+              <div className="mt-4 flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Show scratch notes button</p>
+                  <p className="text-xs text-muted-foreground">
+                    Show a quick-access button at the top of the chat to open scratch notes.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.showScratchNotesButton}
+                  onCheckedChange={(checked) =>
+                    updateSettings({
+                      showScratchNotesButton: Boolean(checked),
+                    })
+                  }
+                  aria-label="Show scratch notes button"
+                />
+              </div>
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">
@@ -546,6 +566,53 @@ function SettingsRouteView() {
                     onClick={() =>
                       updateSettings({
                         enableAssistantStreaming: defaults.enableAssistantStreaming,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Plan Review</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Customize the prompt used when reviewing a plan with another provider.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label
+                  htmlFor="plan-review-prompt"
+                  className="text-sm font-medium text-foreground"
+                >
+                  Review prompt
+                </label>
+                <Textarea
+                  id="plan-review-prompt"
+                  rows={3}
+                  placeholder={DEFAULT_PLAN_REVIEW_PROMPT}
+                  value={settings.planReviewPrompt}
+                  onChange={(event) =>
+                    updateSettings({ planReviewPrompt: event.target.value })
+                  }
+                  className="resize-y text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  The plan markdown will be appended after this prompt.
+                </p>
+              </div>
+
+              {settings.planReviewPrompt !== defaults.planReviewPrompt ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        planReviewPrompt: defaults.planReviewPrompt,
                       })
                     }
                   >

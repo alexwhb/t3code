@@ -46,6 +46,12 @@ const AppSettingsSchema = Schema.Struct({
   sttWhisperModel: Schema.String.check(Schema.isMaxLength(128)).pipe(
     Schema.withConstructorDefault(() => Option.some("whisper-1")),
   ),
+  planReviewPrompt: Schema.String.check(Schema.isMaxLength(2048)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  showScratchNotesButton: Schema.Boolean.pipe(
+    Schema.withConstructorDefault(() => Option.some(false)),
+  ),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {

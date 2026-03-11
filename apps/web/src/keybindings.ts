@@ -230,6 +230,14 @@ export function isOpenFavoriteEditorShortcut(
   return matchesCommandShortcut(event, keybindings, "editor.openFavorite", options);
 }
 
+export function isNotesToggleShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "notes.toggle", options);
+}
+
 export function isTerminalClearShortcut(
   event: ShortcutEventLike,
   platform = navigator.platform,
