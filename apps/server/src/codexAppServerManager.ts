@@ -705,6 +705,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         requestedRuntimeMode: input.runtimeMode,
       }).pipe(this.runPromise);
       this.emitLifecycleEvent(context, "session/ready", `Connected to thread ${providerThreadId}`);
+      this.fetchAndEmitRateLimits(context);
       return { ...context.session };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to start Codex session.";
@@ -1168,6 +1169,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         activeTurnId: undefined,
         lastError: errorMessage ?? context.session.lastError,
       });
+      this.fetchAndEmitRateLimits(context);
       return;
     }
 
@@ -1331,6 +1333,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private emitEvent(event: ProviderEvent): void {
     this.emit("event", event);
+  }
+
+  private fetchAndEmitRateLimits(context: CodexSessionContext): void {
+    this.sendRequest(context, "account/rateLimits/read", {})
+      .then((response) => {
+        this.emitEvent({
+          id: EventId.makeUnsafe(randomUUID()),
+          kind: "notification",
+          provider: "codex",
+          threadId: context.session.threadId,
+          createdAt: new Date().toISOString(),
+          method: "account/rateLimits/updated",
+          payload: response,
+        });
+      })
+      .catch(() => {
+        // Silently ignore — rate limits may not be available for all auth modes
+      });
   }
 
   private assertSupportedCodexCliVersion(input: {

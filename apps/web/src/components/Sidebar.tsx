@@ -83,6 +83,7 @@ import {
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import { resolveThreadStatusPill } from "./Sidebar.logic";
+import { WeeklyLimitPill } from "./WeeklyLimitPill";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -1600,6 +1601,8 @@ export default function Sidebar() {
 
       <SidebarSeparator />
       <SidebarFooter className="p-2">
+        <WeeklyLimitPill />
+        <SidebarSeparator className="my-0" />
         <SidebarMenu>
           <SidebarMenuItem>
             {isOnSettings ? (

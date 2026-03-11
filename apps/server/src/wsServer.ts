@@ -615,6 +615,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const checkpointDiffQuery = yield* CheckpointDiffQuery;
   const orchestrationReactor = yield* OrchestrationReactor;
   const { openInEditor } = yield* Open;
+  const providerService = yield* ProviderService;
 
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
@@ -653,6 +654,18 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         providers,
       },
     }),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
+  yield* Stream.runForEach(
+    providerService.streamEvents.pipe(
+      Stream.filter((event) => event.type === "account.rate-limits.updated"),
+    ),
+    (event) =>
+      broadcastPush({
+        type: "push",
+        channel: WS_CHANNELS.providerRateLimitsUpdated,
+        data: event.payload,
+      }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);

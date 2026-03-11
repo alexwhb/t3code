@@ -15,11 +15,27 @@ import { Cause, Schema } from "effect";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
 
+export interface RateLimitWindow {
+  readonly maxRequests: number;
+  readonly remainingRequests: number;
+  readonly resetAt: string;
+  readonly windowDurationMins: number;
+}
+
+export interface RateLimitsPayload {
+  readonly rateLimits: {
+    readonly primary?: RateLimitWindow;
+    readonly secondary?: RateLimitWindow;
+  };
+}
+
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
+const rateLimitsUpdatedListeners = new Set<(payload: RateLimitsPayload) => void>();
 let lastWelcome: WsWelcomePayload | null = null;
 let lastServerConfigUpdated: ServerConfigUpdatedPayload | null = null;
+let lastRateLimitsUpdated: RateLimitsPayload | null = null;
 
 const decodeAndWarnOnFailure = <T>(
   schema: Schema.Schema<T> & { readonly DecodingServices: never },
@@ -81,6 +97,28 @@ export function onServerConfigUpdated(
   };
 }
 
+/**
+ * Subscribe to provider rate limits updates. Replays the latest update for
+ * late subscribers.
+ */
+export function onRateLimitsUpdated(
+  listener: (payload: RateLimitsPayload) => void,
+): () => void {
+  rateLimitsUpdatedListeners.add(listener);
+
+  if (lastRateLimitsUpdated) {
+    try {
+      listener(lastRateLimitsUpdated);
+    } catch {
+      // Swallow listener errors
+    }
+  }
+
+  return () => {
+    rateLimitsUpdatedListeners.delete(listener);
+  };
+}
+
 export function createWsNativeApi(): NativeApi {
   if (instance) return instance.api;
 
@@ -105,6 +143,18 @@ export function createWsNativeApi(): NativeApi {
     if (!payload) return;
     lastServerConfigUpdated = payload;
     for (const listener of serverConfigUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(WS_CHANNELS.providerRateLimitsUpdated, (data) => {
+    if (!data || typeof data !== "object") return;
+    const payload = data as RateLimitsPayload;
+    lastRateLimitsUpdated = payload;
+    for (const listener of rateLimitsUpdatedListeners) {
       try {
         listener(payload);
       } catch {
