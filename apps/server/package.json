@@ -28,6 +28,7 @@
     "effect": "catalog:",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
+    "sharp": "^0.34.5",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -38,6 +39,7 @@
     "@t3tools/web": "workspace:*",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
+    "@types/sharp": "^0.32.0",
     "@types/ws": "^8.5.13",
     "tsdown": "catalog:",
     "typescript": "catalog:",

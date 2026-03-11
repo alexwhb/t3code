@@ -72,6 +72,7 @@ import {
   resolveAttachmentPath,
   resolveAttachmentPathById,
 } from "./attachmentStore.ts";
+import { compressImageIfNeeded } from "./imageCompression.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
@@ -359,12 +360,22 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             });
           }
 
-          const bytes = Buffer.from(parsed.base64, "base64");
-          if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+          const rawBytes = Buffer.from(parsed.base64, "base64");
+          if (rawBytes.byteLength === 0 || rawBytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
             return yield* new RouteRequestError({
               message: `Image attachment '${attachment.name}' is empty or too large.`,
             });
           }
+
+          // Compress if the base64 encoding would exceed Claude's API limit (5 MB).
+          const compressed = yield* Effect.tryPromise({
+            try: () => compressImageIfNeeded(rawBytes, parsed.mimeType),
+            catch: () =>
+              new RouteRequestError({
+                message: `Failed to compress attachment '${attachment.name}'.`,
+              }),
+          });
+          const bytes = Buffer.from(compressed.bytes);
 
           const attachmentId = createAttachmentId(turnStartCommand.threadId);
           if (!attachmentId) {
@@ -377,7 +388,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             type: "image" as const,
             id: attachmentId,
             name: attachment.name,
-            mimeType: parsed.mimeType.toLowerCase(),
+            mimeType: compressed.mediaType.toLowerCase(),
             sizeBytes: bytes.byteLength,
           };
 
