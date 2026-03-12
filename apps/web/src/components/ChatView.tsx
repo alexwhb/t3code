@@ -93,7 +93,6 @@ import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
   buildPlanReviewPrompt,
-  buildPlanReviewThreadTitle,
   buildProposedPlanMarkdownFilename,
   downloadPlanAsTextFile,
   normalizePlanMarkdownForExport,
@@ -3282,113 +3281,46 @@ export default function ChatView({ threadId }: ChatViewProps) {
     syncServerReadModel,
   ]);
 
-  const onReviewPlanWithProvider = useCallback(async (targetProvider: ProviderKind) => {
-    const api = readNativeApi();
-    if (
-      !api ||
-      !activeThread ||
-      !activeProject ||
-      !activeProposedPlan ||
-      !isServerThread ||
-      isSendBusy ||
-      isConnecting ||
-      sendInFlightRef.current
-    ) {
-      return;
-    }
+  const openPlanReviewThread = useCallback(
+    (planMarkdown: string) => {
+      if (!activeThread || !activeProject) {
+        return;
+      }
 
-    const createdAt = new Date().toISOString();
-    const nextThreadId = newThreadId();
-    const planMarkdown = activeProposedPlan.planMarkdown;
-    const reviewPrompt = buildPlanReviewPrompt(planMarkdown, settings.planReviewPrompt);
-    const nextThreadTitle = truncateTitle(buildPlanReviewThreadTitle(planMarkdown));
-    const nextThreadModel: ModelSlug = DEFAULT_MODEL_BY_PROVIDER[targetProvider];
+      const reviewPrompt = buildPlanReviewPrompt(planMarkdown, settings.planReviewPrompt);
+      const nextThreadId = newThreadId();
 
-    sendInFlightRef.current = true;
-    beginSendPhase("sending-turn");
-    const finish = () => {
-      sendInFlightRef.current = false;
-      resetSendPhase();
-    };
-
-    await api.orchestration
-      .dispatchCommand({
-        type: "thread.create",
-        commandId: newCommandId(),
-        threadId: nextThreadId,
-        projectId: activeProject.id,
-        title: nextThreadTitle,
-        model: nextThreadModel,
-        runtimeMode,
-        interactionMode: "default",
+      setProjectDraftThreadId(activeProject.id, nextThreadId, {
+        createdAt: new Date().toISOString(),
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
         branch: activeThread.branch,
         worktreePath: activeThread.worktreePath,
-        createdAt,
-      })
-      .then(() => {
-        return api.orchestration.dispatchCommand({
-          type: "thread.turn.start",
-          commandId: newCommandId(),
-          threadId: nextThreadId,
-          message: {
-            messageId: newMessageId(),
-            role: "user",
-            text: reviewPrompt,
-            attachments: [],
-          },
-          provider: targetProvider,
-          model: nextThreadModel,
-          assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
-          runtimeMode,
-          interactionMode: "default",
-          createdAt,
-        });
-      })
-      .then(() => api.orchestration.getSnapshot())
-      .then((snapshot) => {
-        syncServerReadModel(snapshot);
-        return navigate({
-          to: "/$threadId",
-          params: { threadId: nextThreadId },
-        });
-      })
-      .catch(async (err) => {
-        await api.orchestration
-          .dispatchCommand({
-            type: "thread.delete",
-            commandId: newCommandId(),
-            threadId: nextThreadId,
-          })
-          .catch(() => undefined);
-        await api.orchestration
-          .getSnapshot()
-          .then((snapshot) => {
-            syncServerReadModel(snapshot);
-          })
-          .catch(() => undefined);
-        toastManager.add({
-          type: "error",
-          title: "Could not start review thread",
-          description:
-            err instanceof Error ? err.message : "An error occurred while creating the review thread.",
-        });
-      })
-      .then(finish, finish);
-  }, [
-    activeProject,
-    activeProposedPlan,
-    activeThread,
-    beginSendPhase,
-    isConnecting,
-    isSendBusy,
-    isServerThread,
-    navigate,
-    resetSendPhase,
-    runtimeMode,
-    settings.enableAssistantStreaming,
-    settings.planReviewPrompt,
-    syncServerReadModel,
-  ]);
+        envMode: activeThread.worktreePath ? "worktree" : "local",
+      });
+      setComposerDraftPrompt(nextThreadId, reviewPrompt);
+
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: nextThreadId },
+      });
+    },
+    [
+      activeProject,
+      activeThread,
+      navigate,
+      setComposerDraftPrompt,
+      setProjectDraftThreadId,
+      settings.planReviewPrompt,
+    ],
+  );
+
+  const onReviewPlan = useCallback(() => {
+    if (!activeProposedPlan) {
+      return;
+    }
+    openPlanReviewThread(activeProposedPlan.planMarkdown);
+  }, [activeProposedPlan, openPlanReviewThread]);
 
   const onProviderModelSelect = useCallback(
     (provider: ProviderKind, model: ModelSlug) => {
@@ -3798,6 +3730,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               onSelectPendingUserInputOption={onSelectActivePendingUserInputOption}
               onAdvancePendingUserInput={onAdvanceActivePendingUserInput}
               onPreviousPendingUserInputQuestion={onPreviousActivePendingUserInputQuestion}
+              onReviewProposedPlan={openPlanReviewThread}
               threadId={activeThread.id}
               threadTitle={activeThread.title}
             />
@@ -4325,8 +4258,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 planSidebarDismissedForTurnRef.current = turnKey;
               }
             }}
-            onReviewWithProvider={onReviewPlanWithProvider}
-            reviewDisabled={isSendBusy || isConnecting}
+            onReviewPlan={onReviewPlan}
           />
         ) : null}
       </div>
@@ -5061,10 +4993,12 @@ const ProposedPlanCard = memo(function ProposedPlanCard({
   planMarkdown,
   cwd,
   workspaceRoot,
+  onReviewPlan,
 }: {
   planMarkdown: string;
   cwd: string | undefined;
   workspaceRoot: string | undefined;
+  onReviewPlan?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
@@ -5162,6 +5096,7 @@ const ProposedPlanCard = memo(function ProposedPlanCard({
             <MenuItem onClick={openSaveDialog} disabled={!workspaceRoot || isSavingToWorkspace}>
               Save to workspace
             </MenuItem>
+            {onReviewPlan ? <MenuItem onClick={onReviewPlan}>Review in new thread</MenuItem> : null}
           </MenuPopup>
         </Menu>
       </div>
@@ -5269,6 +5204,7 @@ interface MessagesTimelineProps {
   onSelectPendingUserInputOption: (questionId: string, optionLabel: string) => void;
   onAdvancePendingUserInput: () => void;
   onPreviousPendingUserInputQuestion: () => void;
+  onReviewProposedPlan?: (planMarkdown: string) => void;
   threadId: ThreadId;
   threadTitle: string;
 }
@@ -5332,6 +5268,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
   onSelectPendingUserInputOption,
   onAdvancePendingUserInput,
   onPreviousPendingUserInputQuestion,
+  onReviewProposedPlan,
   threadId: timelineThreadId,
   threadTitle: timelineThreadTitle,
 }: MessagesTimelineProps) {
@@ -5833,6 +5770,9 @@ const MessagesTimeline = memo(function MessagesTimeline({
             planMarkdown={row.proposedPlan.planMarkdown}
             cwd={markdownCwd}
             workspaceRoot={workspaceRoot}
+            {...(onReviewProposedPlan
+              ? { onReviewPlan: () => onReviewProposedPlan(row.proposedPlan.planMarkdown) }
+              : {})}
           />
         </div>
       )}

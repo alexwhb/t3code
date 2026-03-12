@@ -20,6 +20,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
+import { buildPlanReviewPrompt } from "../proposedPlan";
 import { getRouter } from "../router";
 import { useStore } from "../store";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
@@ -303,7 +304,31 @@ function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
     targetMessageId: "msg-user-plan-target" as MessageId,
     targetText: "plan thread",
   });
-  const planMarkdown = [
+  const planMarkdown = createLongProposedPlanMarkdown();
+
+  return {
+    ...snapshot,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? Object.assign({}, thread, {
+            proposedPlans: [
+              {
+                id: "plan-browser-test",
+                turnId: null,
+                planMarkdown,
+                createdAt: isoAt(1_000),
+                updatedAt: isoAt(1_001),
+              },
+            ],
+            updatedAt: isoAt(1_001),
+          })
+        : thread,
+    ),
+  };
+}
+
+function createLongProposedPlanMarkdown(): string {
+  return [
     "# Ship plan mode follow-up",
     "",
     "- Step 1: capture the thread-open trace",
@@ -331,26 +356,6 @@ function createSnapshotWithLongProposedPlan(): OrchestrationReadModel {
     "export const hiddenPlanImplementationDetail = 'deep hidden detail only after expand';",
     "```",
   ].join("\n");
-
-  return {
-    ...snapshot,
-    threads: snapshot.threads.map((thread) =>
-      thread.id === THREAD_ID
-        ? Object.assign({}, thread, {
-            proposedPlans: [
-              {
-                id: "plan-browser-test",
-                turnId: null,
-                planMarkdown,
-                createdAt: isoAt(1_000),
-                updatedAt: isoAt(1_001),
-              },
-            ],
-            updatedAt: isoAt(1_001),
-          })
-        : thread,
-    ),
-  };
 }
 
 function resolveWsRpc(tag: string): unknown {
@@ -1077,6 +1082,49 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("deep hidden detail only after expand");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens a review draft thread from the inline plan card menu", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotWithLongProposedPlan(),
+    });
+
+    try {
+      const planActionsButton = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Plan actions"]'),
+        "Unable to find inline plan actions button.",
+      );
+      planActionsButton.click();
+
+      const reviewMenuItem = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>("[role='menuitem']")).find(
+            (element) => element.textContent?.trim() === "Review in new thread",
+          ) ?? null,
+        "Unable to find Review in new thread menu item.",
+      );
+      reviewMenuItem.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+      const expectedPrompt = buildPlanReviewPrompt(createLongProposedPlanMarkdown());
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(
+            expectedPrompt,
+          );
         },
         { timeout: 8_000, interval: 16 },
       );

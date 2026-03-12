@@ -54,6 +54,7 @@ interface PlanSidebarProps {
   markdownCwd: string | undefined;
   workspaceRoot: string | undefined;
   onClose: () => void;
+  onReviewPlan?: () => void;
 }
 
 const PlanSidebar = memo(function PlanSidebar({
@@ -62,6 +63,7 @@ const PlanSidebar = memo(function PlanSidebar({
   markdownCwd,
   workspaceRoot,
   onClose,
+  onReviewPlan,
 }: PlanSidebarProps) {
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
@@ -158,6 +160,9 @@ const PlanSidebar = memo(function PlanSidebar({
                 >
                   Save to workspace
                 </MenuItem>
+                {onReviewPlan ? (
+                  <MenuItem onClick={onReviewPlan}>Review in new thread</MenuItem>
+                ) : null}
               </MenuPopup>
             </Menu>
           ) : null}
