@@ -24,6 +24,8 @@ import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { loadCaughtUpSnapshot } from "../orchestrationSnapshotSync";
+import { getOrchestrationSyncState } from "../orchestrationSyncState";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -148,15 +150,23 @@ function EventRouter() {
     const api = readNativeApi();
     if (!api) return;
     let disposed = false;
-    let latestSequence = 0;
     let syncing = false;
     let pending = false;
     let needsProviderInvalidation = false;
+    const orchestrationSyncState = getOrchestrationSyncState();
 
     const flushSnapshotSync = async (): Promise<void> => {
-      const snapshot = await api.orchestration.getSnapshot();
+      const snapshot = await loadCaughtUpSnapshot({
+        api: api.orchestration,
+        readLatestSequence: () => orchestrationSyncState.latestSequence,
+        writeLatestSequence: (sequence) => {
+          orchestrationSyncState.latestSequence = Math.max(
+            orchestrationSyncState.latestSequence,
+            sequence,
+          );
+        },
+      });
       if (disposed) return;
-      latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
       syncServerReadModel(snapshot);
       clearPromotedDraftThreads(new Set(snapshot.threads.map((t) => t.id)));
       const draftThreadIds = Object.keys(
@@ -207,10 +217,10 @@ function EventRouter() {
     );
 
     const unsubDomainEvent = api.orchestration.onDomainEvent((event) => {
-      if (event.sequence <= latestSequence) {
+      if (event.sequence <= orchestrationSyncState.latestSequence) {
         return;
       }
-      latestSequence = event.sequence;
+      orchestrationSyncState.latestSequence = event.sequence;
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
         needsProviderInvalidation = true;
       }
