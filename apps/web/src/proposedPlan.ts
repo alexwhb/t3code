@@ -70,6 +70,25 @@ function sanitizePlanFileSegment(input: string): string {
   return sanitized.length > 0 ? sanitized : "plan";
 }
 
+export const DEFAULT_PLAN_REVIEW_PROMPT =
+  "Please review this plan and provide feedback on its feasibility, potential issues, and suggestions for improvement:";
+
+export function buildPlanReviewPrompt(planMarkdown: string, customPrompt?: string): string {
+  const prompt =
+    customPrompt && customPrompt.trim().length > 0
+      ? customPrompt.trim()
+      : DEFAULT_PLAN_REVIEW_PROMPT;
+  return `${prompt}\n\n${planMarkdown.trim()}`;
+}
+
+export function buildPlanReviewThreadTitle(planMarkdown: string): string {
+  const title = proposedPlanTitle(planMarkdown);
+  if (!title) {
+    return "Review plan";
+  }
+  return `Review ${title}`;
+}
+
 export function buildPlanImplementationPrompt(planMarkdown: string): string {
   return `PLEASE IMPLEMENT THIS PLAN:\n${planMarkdown.trim()}`;
 }
