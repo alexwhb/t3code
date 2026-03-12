@@ -205,7 +205,9 @@ function toLegacyProvider(providerName: string | null): ProviderKind {
 }
 
 const CODEX_MODEL_SLUGS = new Set<string>(getModelOptions("codex").map((option) => option.slug));
-const CLAUDE_MODEL_SLUGS = new Set<string>(getModelOptions("claudeCode").map((option) => option.slug));
+const CLAUDE_MODEL_SLUGS = new Set<string>(
+  getModelOptions("claudeCode").map((option) => option.slug),
+);
 
 function inferProviderForThreadModel(input: {
   readonly model: string;
@@ -451,10 +453,7 @@ export function reorderThreads(
  * Threads in the saved order come first (in saved order), followed by
  * any new threads not yet in the saved order (preserving their original order).
  */
-export function applyThreadOrder(
-  threadIds: string[],
-  savedOrder: string[] | undefined,
-): string[] {
+export function applyThreadOrder(threadIds: string[], savedOrder: string[] | undefined): string[] {
   if (!savedOrder || savedOrder.length === 0) return threadIds;
   const idSet = new Set(threadIds);
   const ordered: string[] = [];

@@ -182,12 +182,10 @@ function describeToolInput(toolName: string | undefined, data: unknown): string 
 
   const rec = data as Record<string, unknown>;
   // Claude Code nests input under item.input; Codex under item.input or directly
-  const item = rec.item && typeof rec.item === "object" ? (rec.item as Record<string, unknown>) : undefined;
+  const item =
+    rec.item && typeof rec.item === "object" ? (rec.item as Record<string, unknown>) : undefined;
   const input = (() => {
-    const candidates = [
-      item?.input,
-      rec.input,
-    ];
+    const candidates = [item?.input, rec.input];
     for (const c of candidates) {
       if (c && typeof c === "object") return c as Record<string, unknown>;
     }
@@ -244,7 +242,11 @@ function describeToolInput(toolName: string | undefined, data: unknown): string 
     return asNonEmptyString(input.query);
   }
   // Generic fallback: look for common parameter names
-  return shortenPath(asNonEmptyString(input.file_path)) ?? asNonEmptyString(input.pattern) ?? asNonEmptyString(input.query);
+  return (
+    shortenPath(asNonEmptyString(input.file_path)) ??
+    asNonEmptyString(input.pattern) ??
+    asNonEmptyString(input.query)
+  );
 }
 
 function asNonEmptyString(v: unknown): string | undefined {
@@ -558,7 +560,9 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
-      const startedToolName = event.payload.detail ? truncateDetail(event.payload.detail) : undefined;
+      const startedToolName = event.payload.detail
+        ? truncateDetail(event.payload.detail)
+        : undefined;
       const startedInputDetail = describeToolInput(startedToolName, event.payload.data);
       const startedSummary = startedToolName
         ? startedInputDetail

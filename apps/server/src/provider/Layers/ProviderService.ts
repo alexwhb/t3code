@@ -183,24 +183,26 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return Effect.void;
       }
 
-      return directory.upsert({
-        threadId: event.threadId,
-        provider: event.provider,
-        resumeCursor,
-        runtimePayload: {
-          lastRuntimeEvent: event.type,
-          lastRuntimeEventAt: event.createdAt,
-        },
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("failed to persist provider runtime binding update", {
-            threadId: event.threadId,
-            provider: event.provider,
-            eventType: event.type,
-            cause,
-          }),
-        ),
-      );
+      return directory
+        .upsert({
+          threadId: event.threadId,
+          provider: event.provider,
+          resumeCursor,
+          runtimePayload: {
+            lastRuntimeEvent: event.type,
+            lastRuntimeEventAt: event.createdAt,
+          },
+        })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("failed to persist provider runtime binding update", {
+              threadId: event.threadId,
+              provider: event.provider,
+              eventType: event.type,
+              cause,
+            }),
+          ),
+        );
     };
 
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -320,9 +322,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         // previous provider session left off (e.g. after an app restart).
         let resolvedResumeCursor = parsed.resumeCursor;
         if (resolvedResumeCursor === undefined) {
-          const bindingOption = yield* directory.getBinding(threadId).pipe(
-            Effect.orElseSucceed(() => Option.none<ProviderRuntimeBinding>()),
-          );
+          const bindingOption = yield* directory
+            .getBinding(threadId)
+            .pipe(Effect.orElseSucceed(() => Option.none<ProviderRuntimeBinding>()));
           const binding = Option.getOrUndefined(bindingOption);
           if (
             binding?.resumeCursor !== null &&

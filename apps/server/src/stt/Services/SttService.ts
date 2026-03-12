@@ -25,11 +25,11 @@ const convertToWav = (audioBuffer: Buffer): Effect.Effect<Buffer, SttTranscribeE
   Effect.tryPromise({
     try: () =>
       new Promise<Buffer>((resolve, reject) => {
-        const proc = spawn("ffmpeg", [
-          "-i", "pipe:0",
-          "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
-          "-f", "wav", "pipe:1",
-        ], { stdio: ["pipe", "pipe", "pipe"] });
+        const proc = spawn(
+          "ffmpeg",
+          ["-i", "pipe:0", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1"],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
 
         const chunks: Buffer[] = [];
         proc.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -71,9 +71,7 @@ const makeSttService = Effect.succeed(
 
         // whisper.cpp only accepts WAV — convert if needed
         const needsConversion = !isOpenAi && !input.mimeType.includes("wav");
-        const finalBuffer = needsConversion
-          ? yield* convertToWav(audioBuffer)
-          : audioBuffer;
+        const finalBuffer = needsConversion ? yield* convertToWav(audioBuffer) : audioBuffer;
         const finalMime = needsConversion ? "audio/wav" : input.mimeType;
         const finalExt = needsConversion ? "wav" : ext;
 

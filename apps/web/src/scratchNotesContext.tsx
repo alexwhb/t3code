@@ -18,11 +18,7 @@ export function ScratchNotesProvider({
   pinMessage: (params: PinMessageParams) => void;
 }) {
   const value = useMemo(() => ({ openSheet, pinMessage }), [openSheet, pinMessage]);
-  return (
-    <ScratchNotesContext.Provider value={value}>
-      {children}
-    </ScratchNotesContext.Provider>
-  );
+  return <ScratchNotesContext.Provider value={value}>{children}</ScratchNotesContext.Provider>;
 }
 
 export function useScratchNotesContext(): ScratchNotesContextValue | null {

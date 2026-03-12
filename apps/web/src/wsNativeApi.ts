@@ -82,9 +82,7 @@ export function onServerConfigUpdated(
  * Subscribe to provider rate limits updates. Replays the latest update for
  * late subscribers.
  */
-export function onRateLimitsUpdated(
-  listener: (payload: RateLimitsPayload) => void,
-): () => void {
+export function onRateLimitsUpdated(listener: (payload: RateLimitsPayload) => void): () => void {
   rateLimitsUpdatedListeners.add(listener);
 
   if (lastRateLimitsUpdated) {

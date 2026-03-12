@@ -1563,191 +1563,191 @@ export default function Sidebar() {
                                 modifiers={[restrictToVerticalAxis, restrictToParentElement]}
                                 onDragEnd={(event) => handleThreadDragEnd(event, project.cwd)}
                               >
-                              <SortableContext
-                                items={visibleThreads.map((t) => t.id)}
-                                strategy={verticalListSortingStrategy}
-                              >
-                                {visibleThreads.map((thread) => {
-                                  const isActive = routeThreadId === thread.id;
-                                  const isSelected = selectedThreadIds.has(thread.id);
-                                  const isHighlighted = isActive || isSelected;
-                                  const threadStatus = resolveThreadStatusPill({
-                                    thread,
-                                    hasPendingApprovals:
-                                      pendingApprovalByThreadId.get(thread.id) === true,
-                                    hasPendingUserInput:
-                                      pendingUserInputByThreadId.get(thread.id) === true,
-                                  });
-                                  const prStatus = prStatusIndicator(
-                                    prByThreadId.get(thread.id) ?? null,
-                                  );
-                                  const terminalStatus = terminalStatusFromRunningIds(
-                                    selectThreadTerminalState(terminalStateByThreadId, thread.id)
-                                      .runningTerminalIds,
-                                  );
+                                <SortableContext
+                                  items={visibleThreads.map((t) => t.id)}
+                                  strategy={verticalListSortingStrategy}
+                                >
+                                  {visibleThreads.map((thread) => {
+                                    const isActive = routeThreadId === thread.id;
+                                    const isSelected = selectedThreadIds.has(thread.id);
+                                    const isHighlighted = isActive || isSelected;
+                                    const threadStatus = resolveThreadStatusPill({
+                                      thread,
+                                      hasPendingApprovals:
+                                        pendingApprovalByThreadId.get(thread.id) === true,
+                                      hasPendingUserInput:
+                                        pendingUserInputByThreadId.get(thread.id) === true,
+                                    });
+                                    const prStatus = prStatusIndicator(
+                                      prByThreadId.get(thread.id) ?? null,
+                                    );
+                                    const terminalStatus = terminalStatusFromRunningIds(
+                                      selectThreadTerminalState(terminalStateByThreadId, thread.id)
+                                        .runningTerminalIds,
+                                    );
 
-                                  return (
-                                    <SortableThreadItem key={thread.id} threadId={thread.id}>
-                                      <SidebarMenuSubButton
-                                        render={<div role="button" tabIndex={0} />}
-                                        size="sm"
-                                        isActive={isActive}
-                                        className={`h-7 w-full translate-x-0 cursor-default justify-start px-2 text-left select-none hover:bg-accent hover:text-foreground focus-visible:ring-0 ${
-                                          isSelected
-                                            ? "bg-primary/15 text-foreground dark:bg-primary/10"
-                                            : isActive
-                                              ? "bg-accent/85 text-foreground font-medium dark:bg-accent/55"
-                                            : "text-muted-foreground"
-                                      }`}
-                                      onClick={(event) => {
-                                        handleThreadClick(
-                                          event,
-                                          thread.id,
-                                          orderedProjectThreadIds,
-                                        );
-                                      }}
-                                      onKeyDown={(event) => {
-                                        if (event.key !== "Enter" && event.key !== " ") return;
-                                        event.preventDefault();
-                                        if (selectedThreadIds.size > 0) {
-                                          clearSelection();
-                                        }
-                                        setSelectionAnchor(thread.id);
-                                        void navigate({
-                                          to: "/$threadId",
-                                          params: { threadId: thread.id },
-                                        });
-                                      }}
-                                      onContextMenu={(event) => {
-                                        event.preventDefault();
-                                        if (
-                                          selectedThreadIds.size > 0 &&
-                                          selectedThreadIds.has(thread.id)
-                                        ) {
-                                          void handleMultiSelectContextMenu({
-                                            x: event.clientX,
-                                            y: event.clientY,
-                                          });
-                                        } else {
-                                          if (selectedThreadIds.size > 0) {
-                                            clearSelection();
-                                          }
-                                          void handleThreadContextMenu(thread.id, {
-                                            x: event.clientX,
-                                            y: event.clientY,
-                                          });
-                                        }
-                                      }}
-                                    >
-                                      <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-                                        {prStatus && (
-                                          <Tooltip>
-                                            <TooltipTrigger
-                                              render={
-                                                <button
-                                                  type="button"
-                                                  aria-label={prStatus.tooltip}
-                                                  className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
-                                                  onClick={(event) => {
-                                                    openPrLink(event, prStatus.url);
-                                                  }}
-                                                >
-                                                  <GitPullRequestIcon className="size-3" />
-                                                </button>
-                                              }
-                                            />
-                                            <TooltipPopup side="top">
-                                              {prStatus.tooltip}
-                                            </TooltipPopup>
-                                          </Tooltip>
-                                        )}
-                                        {threadStatus && (
-                                          <span
-                                            className={`inline-flex items-center gap-1 text-[10px] ${threadStatus.colorClass}`}
-                                          >
-                                            <span
-                                              className={`h-1.5 w-1.5 rounded-full ${threadStatus.dotClass} ${
-                                                threadStatus.pulse ? "animate-pulse" : ""
-                                              }`}
-                                            />
-                                            <span className="hidden md:inline">
-                                              {threadStatus.label}
-                                            </span>
-                                          </span>
-                                        )}
-                                        {renamingThreadId === thread.id ? (
-                                          <input
-                                            ref={(el) => {
-                                              if (el && renamingInputRef.current !== el) {
-                                                renamingInputRef.current = el;
-                                                el.focus();
-                                                el.select();
-                                              }
-                                            }}
-                                            className="min-w-0 flex-1 truncate text-xs bg-transparent outline-none border border-ring rounded px-0.5"
-                                            value={renamingTitle}
-                                            onChange={(e) => setRenamingTitle(e.target.value)}
-                                            onKeyDown={(e) => {
-                                              e.stopPropagation();
-                                              if (e.key === "Enter") {
-                                                e.preventDefault();
-                                                renamingCommittedRef.current = true;
-                                                void commitRename(
-                                                  thread.id,
-                                                  renamingTitle,
-                                                  thread.title,
-                                                );
-                                              } else if (e.key === "Escape") {
-                                                e.preventDefault();
-                                                renamingCommittedRef.current = true;
-                                                cancelRename();
-                                              }
-                                            }}
-                                            onBlur={() => {
-                                              if (!renamingCommittedRef.current) {
-                                                void commitRename(
-                                                  thread.id,
-                                                  renamingTitle,
-                                                  thread.title,
-                                                );
-                                              }
-                                            }}
-                                            onClick={(e) => e.stopPropagation()}
-                                          />
-                                        ) : (
-                                          <span className="min-w-0 flex-1 truncate text-xs">
-                                            {thread.title}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                                        {terminalStatus && (
-                                          <span
-                                            role="img"
-                                            aria-label={terminalStatus.label}
-                                            title={terminalStatus.label}
-                                            className={`inline-flex items-center justify-center ${terminalStatus.colorClass}`}
-                                          >
-                                            <TerminalIcon
-                                              className={`size-3 ${terminalStatus.pulse ? "animate-pulse" : ""}`}
-                                            />
-                                          </span>
-                                        )}
-                                        <span
-                                          className={`text-[10px] ${
-                                            isHighlighted
-                                              ? "text-foreground/65"
-                                              : "text-muted-foreground/40"
+                                    return (
+                                      <SortableThreadItem key={thread.id} threadId={thread.id}>
+                                        <SidebarMenuSubButton
+                                          render={<div role="button" tabIndex={0} />}
+                                          size="sm"
+                                          isActive={isActive}
+                                          className={`h-7 w-full translate-x-0 cursor-default justify-start px-2 text-left select-none hover:bg-accent hover:text-foreground focus-visible:ring-0 ${
+                                            isSelected
+                                              ? "bg-primary/15 text-foreground dark:bg-primary/10"
+                                              : isActive
+                                                ? "bg-accent/85 text-foreground font-medium dark:bg-accent/55"
+                                                : "text-muted-foreground"
                                           }`}
+                                          onClick={(event) => {
+                                            handleThreadClick(
+                                              event,
+                                              thread.id,
+                                              orderedProjectThreadIds,
+                                            );
+                                          }}
+                                          onKeyDown={(event) => {
+                                            if (event.key !== "Enter" && event.key !== " ") return;
+                                            event.preventDefault();
+                                            if (selectedThreadIds.size > 0) {
+                                              clearSelection();
+                                            }
+                                            setSelectionAnchor(thread.id);
+                                            void navigate({
+                                              to: "/$threadId",
+                                              params: { threadId: thread.id },
+                                            });
+                                          }}
+                                          onContextMenu={(event) => {
+                                            event.preventDefault();
+                                            if (
+                                              selectedThreadIds.size > 0 &&
+                                              selectedThreadIds.has(thread.id)
+                                            ) {
+                                              void handleMultiSelectContextMenu({
+                                                x: event.clientX,
+                                                y: event.clientY,
+                                              });
+                                            } else {
+                                              if (selectedThreadIds.size > 0) {
+                                                clearSelection();
+                                              }
+                                              void handleThreadContextMenu(thread.id, {
+                                                x: event.clientX,
+                                                y: event.clientY,
+                                              });
+                                            }
+                                          }}
                                         >
-                                          {formatRelativeTime(thread.createdAt)}
-                                        </span>
-                                      </div>
-                                    </SidebarMenuSubButton>
-                                  </SortableThreadItem>
-                                );
-                              })}
-                              </SortableContext>
+                                          <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                                            {prStatus && (
+                                              <Tooltip>
+                                                <TooltipTrigger
+                                                  render={
+                                                    <button
+                                                      type="button"
+                                                      aria-label={prStatus.tooltip}
+                                                      className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
+                                                      onClick={(event) => {
+                                                        openPrLink(event, prStatus.url);
+                                                      }}
+                                                    >
+                                                      <GitPullRequestIcon className="size-3" />
+                                                    </button>
+                                                  }
+                                                />
+                                                <TooltipPopup side="top">
+                                                  {prStatus.tooltip}
+                                                </TooltipPopup>
+                                              </Tooltip>
+                                            )}
+                                            {threadStatus && (
+                                              <span
+                                                className={`inline-flex items-center gap-1 text-[10px] ${threadStatus.colorClass}`}
+                                              >
+                                                <span
+                                                  className={`h-1.5 w-1.5 rounded-full ${threadStatus.dotClass} ${
+                                                    threadStatus.pulse ? "animate-pulse" : ""
+                                                  }`}
+                                                />
+                                                <span className="hidden md:inline">
+                                                  {threadStatus.label}
+                                                </span>
+                                              </span>
+                                            )}
+                                            {renamingThreadId === thread.id ? (
+                                              <input
+                                                ref={(el) => {
+                                                  if (el && renamingInputRef.current !== el) {
+                                                    renamingInputRef.current = el;
+                                                    el.focus();
+                                                    el.select();
+                                                  }
+                                                }}
+                                                className="min-w-0 flex-1 truncate text-xs bg-transparent outline-none border border-ring rounded px-0.5"
+                                                value={renamingTitle}
+                                                onChange={(e) => setRenamingTitle(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                  e.stopPropagation();
+                                                  if (e.key === "Enter") {
+                                                    e.preventDefault();
+                                                    renamingCommittedRef.current = true;
+                                                    void commitRename(
+                                                      thread.id,
+                                                      renamingTitle,
+                                                      thread.title,
+                                                    );
+                                                  } else if (e.key === "Escape") {
+                                                    e.preventDefault();
+                                                    renamingCommittedRef.current = true;
+                                                    cancelRename();
+                                                  }
+                                                }}
+                                                onBlur={() => {
+                                                  if (!renamingCommittedRef.current) {
+                                                    void commitRename(
+                                                      thread.id,
+                                                      renamingTitle,
+                                                      thread.title,
+                                                    );
+                                                  }
+                                                }}
+                                                onClick={(e) => e.stopPropagation()}
+                                              />
+                                            ) : (
+                                              <span className="min-w-0 flex-1 truncate text-xs">
+                                                {thread.title}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                                            {terminalStatus && (
+                                              <span
+                                                role="img"
+                                                aria-label={terminalStatus.label}
+                                                title={terminalStatus.label}
+                                                className={`inline-flex items-center justify-center ${terminalStatus.colorClass}`}
+                                              >
+                                                <TerminalIcon
+                                                  className={`size-3 ${terminalStatus.pulse ? "animate-pulse" : ""}`}
+                                                />
+                                              </span>
+                                            )}
+                                            <span
+                                              className={`text-[10px] ${
+                                                isHighlighted
+                                                  ? "text-foreground/65"
+                                                  : "text-muted-foreground/40"
+                                              }`}
+                                            >
+                                              {formatRelativeTime(thread.createdAt)}
+                                            </span>
+                                          </div>
+                                        </SidebarMenuSubButton>
+                                      </SortableThreadItem>
+                                    );
+                                  })}
+                                </SortableContext>
                               </DndContext>
 
                               {hasHiddenThreads && !isThreadListExpanded && (

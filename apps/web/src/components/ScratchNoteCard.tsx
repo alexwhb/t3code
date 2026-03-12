@@ -54,7 +54,9 @@ function FreeformNoteCard({
   return (
     <div className="group/card rounded-lg border border-border bg-background p-3">
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="text-[10px] text-muted-foreground/50">{formatRelativeTime(note.updatedAt)}</span>
+        <span className="text-[10px] text-muted-foreground/50">
+          {formatRelativeTime(note.updatedAt)}
+        </span>
         <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover/card:opacity-100">
           {!editing && (
             <Button
@@ -71,7 +73,13 @@ function FreeformNoteCard({
               <PencilIcon className="size-3" />
             </Button>
           )}
-          <Button type="button" size="xs" variant="ghost" onClick={() => onDelete(note.id)} title="Delete note">
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() => onDelete(note.id)}
+            title="Delete note"
+          >
             <Trash2Icon className="size-3" />
           </Button>
         </div>
@@ -148,12 +156,21 @@ function PinnedMessageCard({
     <div className="group/card rounded-lg border border-border bg-background p-3">
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <span className="text-[10px] text-muted-foreground/50">
-          Pinned from <span className="font-medium text-muted-foreground/70">{note.sourceThreadTitle || "thread"}</span>
+          Pinned from{" "}
+          <span className="font-medium text-muted-foreground/70">
+            {note.sourceThreadTitle || "thread"}
+          </span>
           {" \u00b7 "}
           {formatRelativeTime(note.createdAt)}
         </span>
         <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover/card:opacity-100">
-          <Button type="button" size="xs" variant="ghost" onClick={() => onDelete(note.id)} title="Unpin">
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() => onDelete(note.id)}
+            title="Unpin"
+          >
             <Trash2Icon className="size-3" />
           </Button>
         </div>

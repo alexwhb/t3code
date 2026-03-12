@@ -96,7 +96,8 @@ export function useSpeechToText({
   // servers are unreachable from the Electron network stack.
   const isBrowserSupported =
     !isElectron && typeof window !== "undefined" && getSpeechRecognitionConstructor() !== null;
-  const isWhisperSupported = typeof MediaRecorder !== "undefined" && getSupportedMimeType() !== null;
+  const isWhisperSupported =
+    typeof MediaRecorder !== "undefined" && getSupportedMimeType() !== null;
   const isSupported = provider === "browser" ? isBrowserSupported : isWhisperSupported;
 
   // Cleanup on unmount

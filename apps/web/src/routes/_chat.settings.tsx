@@ -300,13 +300,16 @@ function SettingsRouteView() {
                 {PROVIDER_OPTIONS.filter((o) => o.available).map((providerOption) => {
                   const provider = providerOption.value as ProviderKind;
                   const modelOptions = getModelOptions(provider);
-                  const currentDefault =
-                    getSettingsDefaultModel(settings, provider) ?? "";
+                  const currentDefault = getSettingsDefaultModel(settings, provider) ?? "";
                   const settingsKey =
                     provider === "codex" ? "defaultCodexModel" : "defaultClaudeCodeModel";
 
                   return (
-                    <label key={provider} htmlFor={`default-model-${provider}`} className="block space-y-1">
+                    <label
+                      key={provider}
+                      htmlFor={`default-model-${provider}`}
+                      className="block space-y-1"
+                    >
                       <span className="text-xs font-medium text-foreground">
                         Default {providerOption.label} model
                       </span>
@@ -316,9 +319,7 @@ function SettingsRouteView() {
                         onChange={(event) => updateSettings({ [settingsKey]: event.target.value })}
                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
-                        <option value="">
-                          System default ({getDefaultModel(provider)})
-                        </option>
+                        <option value="">System default ({getDefaultModel(provider)})</option>
                         {modelOptions.map((option) => (
                           <option key={option.slug} value={option.slug}>
                             {option.name}
@@ -329,7 +330,9 @@ function SettingsRouteView() {
                   );
                 })}
 
-                {(settings.defaultProvider || settings.defaultCodexModel || settings.defaultClaudeCodeModel) ? (
+                {settings.defaultProvider ||
+                settings.defaultCodexModel ||
+                settings.defaultClaudeCodeModel ? (
                   <div className="flex justify-end">
                     <Button
                       size="xs"
@@ -595,10 +598,7 @@ function SettingsRouteView() {
               </div>
 
               <div className="space-y-2">
-                <label
-                  htmlFor="plan-review-prompt"
-                  className="text-sm font-medium text-foreground"
-                >
+                <label htmlFor="plan-review-prompt" className="text-sm font-medium text-foreground">
                   Review prompt
                 </label>
                 <Textarea
@@ -606,9 +606,7 @@ function SettingsRouteView() {
                   rows={3}
                   placeholder={DEFAULT_PLAN_REVIEW_PROMPT}
                   value={settings.planReviewPrompt}
-                  onChange={(event) =>
-                    updateSettings({ planReviewPrompt: event.target.value })
-                  }
+                  onChange={(event) => updateSettings({ planReviewPrompt: event.target.value })}
                   className="resize-y text-sm"
                 />
                 <p className="text-xs text-muted-foreground">
@@ -693,7 +691,11 @@ function SettingsRouteView() {
                     ))}
                   </select>
                   <span className="text-xs text-muted-foreground">
-                    {STT_PROVIDER_OPTIONS.find((o) => o.value === (settings.sttProvider || "whisper"))?.description}
+                    {
+                      STT_PROVIDER_OPTIONS.find(
+                        (o) => o.value === (settings.sttProvider || "whisper"),
+                      )?.description
+                    }
                   </span>
                 </label>
 
@@ -711,7 +713,8 @@ function SettingsRouteView() {
                         spellCheck={false}
                       />
                       <span className="text-xs text-muted-foreground">
-                        Leave blank to use the server&apos;s default (OpenAI API). Set to a local URL for self-hosted Whisper.
+                        Leave blank to use the server&apos;s default (OpenAI API). Set to a local
+                        URL for self-hosted Whisper.
                       </span>
                     </label>
 
@@ -728,7 +731,8 @@ function SettingsRouteView() {
                         spellCheck={false}
                       />
                       <span className="text-xs text-muted-foreground">
-                        Optional. Leave blank if the server already has OPENAI_API_KEY set, or for local Whisper.
+                        Optional. Leave blank if the server already has OPENAI_API_KEY set, or for
+                        local Whisper.
                       </span>
                     </label>
 
@@ -747,10 +751,10 @@ function SettingsRouteView() {
                   </>
                 ) : null}
 
-                {(settings.sttProvider !== defaults.sttProvider ||
-                  settings.sttWhisperEndpoint !== defaults.sttWhisperEndpoint ||
-                  settings.sttWhisperApiKey !== defaults.sttWhisperApiKey ||
-                  settings.sttWhisperModel !== defaults.sttWhisperModel) ? (
+                {settings.sttProvider !== defaults.sttProvider ||
+                settings.sttWhisperEndpoint !== defaults.sttWhisperEndpoint ||
+                settings.sttWhisperApiKey !== defaults.sttWhisperApiKey ||
+                settings.sttWhisperModel !== defaults.sttWhisperModel ? (
                   <div className="flex justify-end">
                     <Button
                       size="xs"

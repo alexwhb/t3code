@@ -21,6 +21,7 @@ export interface ClaudeCodeAdapterShape extends ProviderAdapterShape<ProviderAda
 /**
  * ClaudeCodeAdapter - Service tag for Claude Code provider adapter operations.
  */
-export class ClaudeCodeAdapter extends ServiceMap.Service<ClaudeCodeAdapter, ClaudeCodeAdapterShape>()(
-  "t3/provider/Services/ClaudeCodeAdapter",
-) {}
+export class ClaudeCodeAdapter extends ServiceMap.Service<
+  ClaudeCodeAdapter,
+  ClaudeCodeAdapterShape
+>()("t3/provider/Services/ClaudeCodeAdapter") {}

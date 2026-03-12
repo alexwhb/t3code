@@ -26,10 +26,10 @@ function formatResetTime(resetAt: string): string {
   return `resets in ${mins}m`;
 }
 
-function classifyLimits(rateLimits: {
-  primary?: RateLimitWindow;
-  secondary?: RateLimitWindow;
-}): { weekly?: RateLimitWindow; session?: RateLimitWindow } {
+function classifyLimits(rateLimits: { primary?: RateLimitWindow; secondary?: RateLimitWindow }): {
+  weekly?: RateLimitWindow;
+  session?: RateLimitWindow;
+} {
   const result: { weekly?: RateLimitWindow; session?: RateLimitWindow } = {};
   for (const w of [rateLimits.primary, rateLimits.secondary]) {
     if (!w) continue;
@@ -42,9 +42,7 @@ function classifyLimits(rateLimits: {
 
 function UsageRow({ label, window }: { label: string; window: RateLimitWindow }) {
   const pctRemaining =
-    window.maxRequests > 0
-      ? Math.round((window.remainingRequests / window.maxRequests) * 100)
-      : 0;
+    window.maxRequests > 0 ? Math.round((window.remainingRequests / window.maxRequests) * 100) : 0;
   const pctUsed = 100 - pctRemaining;
 
   return (
@@ -59,7 +57,9 @@ function UsageRow({ label, window }: { label: string; window: RateLimitWindow })
           style={{ width: `${pctUsed}%` }}
         />
       </div>
-      <span className="text-[11px] text-muted-foreground/60">{formatResetTime(window.resetAt)}</span>
+      <span className="text-[11px] text-muted-foreground/60">
+        {formatResetTime(window.resetAt)}
+      </span>
     </div>
   );
 }
