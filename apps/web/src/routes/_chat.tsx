@@ -1,12 +1,17 @@
 import { Outlet, createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ThreadId } from "@t3tools/contracts";
 
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import ThreadSidebar from "../components/Sidebar";
 import ScratchNotesSheet from "../components/ScratchNotesSheet";
-import { Sidebar, SidebarProvider } from "~/components/ui/sidebar";
+import {
+  Sidebar,
+  SidebarProvider,
+  SidebarRail,
+  SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH,
+} from "~/components/ui/sidebar";
 import { useStore } from "../store";
 import { useScratchNotes } from "../scratchNotes";
 import { ScratchNotesProvider } from "../scratchNotesContext";
@@ -14,6 +19,9 @@ import { resolveShortcutCommand } from "../keybindings";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 
 const EMPTY_KEYBINDINGS: never[] = [];
+const LEFT_SIDEBAR_MIN = SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH; // 256px
+const LEFT_SIDEBAR_MAX = SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH * 3; // 768px
+const MIN_MAIN_CONTENT_WIDTH = 480;
 
 function ChatRouteLayout() {
   const navigate = useNavigate();
@@ -32,6 +40,23 @@ function ChatRouteLayout() {
   const activeProjectCwd = activeProject?.cwd ?? null;
 
   const { pinMessage } = useScratchNotes(activeProjectCwd);
+
+  const shouldAcceptLeftSidebarWidth = useCallback(
+    ({ nextWidth, wrapper }: { nextWidth: number; wrapper: HTMLElement }) => {
+      return wrapper.clientWidth - nextWidth >= MIN_MAIN_CONTENT_WIDTH;
+    },
+    [],
+  );
+
+  const leftSidebarResizable = useMemo(
+    () => ({
+      minWidth: LEFT_SIDEBAR_MIN,
+      maxWidth: LEFT_SIDEBAR_MAX,
+      shouldAcceptWidth: shouldAcceptLeftSidebarWidth,
+      storageKey: "chat_left_sidebar_width",
+    }),
+    [shouldAcceptLeftSidebarWidth],
+  );
 
   const openSheet = useCallback(() => setScratchNotesOpen(true), []);
 
@@ -78,9 +103,11 @@ function ChatRouteLayout() {
         <Sidebar
           side="left"
           collapsible="offcanvas"
+          resizable={leftSidebarResizable}
           className="border-r border-border bg-card text-foreground"
         >
           <ThreadSidebar />
+          <SidebarRail />
         </Sidebar>
         <DiffWorkerPoolProvider>
           <Outlet />
