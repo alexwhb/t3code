@@ -1,6 +1,7 @@
-import { PlusIcon, StickyNoteIcon } from "lucide-react";
+import { useState } from "react";
+import { ListTodoIcon, PlusIcon, StickyNoteIcon } from "lucide-react";
 
-import { useScratchNotes } from "../scratchNotes";
+import { type ScratchNotesTab, useScratchNotes } from "../scratchNotes";
 import { Button } from "./ui/button";
 import {
   Sheet,
@@ -11,6 +12,8 @@ import {
   SheetPanel,
 } from "./ui/sheet";
 import ScratchNoteCard from "./ScratchNoteCard";
+import ScratchTodoCard from "./ScratchTodoCard";
+import { Toggle, ToggleGroup } from "./ui/toggle-group";
 
 interface ScratchNotesSheetProps {
   open: boolean;
@@ -23,32 +26,75 @@ export default function ScratchNotesSheet({
   onOpenChange,
   projectCwd,
 }: ScratchNotesSheetProps) {
-  const { notes, addNote, updateNote, deleteNote } = useScratchNotes(projectCwd);
+  const { notes, todos, addNote, addTodo, updateNote, updateTodo, deleteNote, deleteTodo } =
+    useScratchNotes(projectCwd);
+  const [activeTab, setActiveTab] = useState<ScratchNotesTab>("notes");
+  const emptyStateIcon =
+    activeTab === "notes" ? (
+      <StickyNoteIcon className="size-8 opacity-40" />
+    ) : (
+      <ListTodoIcon className="size-8 opacity-40" />
+    );
+  const emptyStateCopy =
+    activeTab === "notes"
+      ? "No notes yet. Add a freeform note or pin an assistant message."
+      : "No to-dos yet. Add one to keep project tasks visible next to your notes.";
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetPopup side="right">
         <SheetHeader>
           <SheetTitle>Scratch Notes</SheetTitle>
-          <SheetDescription>
-            Freeform markdown notes scoped to this project.
-          </SheetDescription>
-          <div className="flex justify-end">
-            <Button type="button" size="xs" variant="outline" onClick={addNote}>
+          <SheetDescription>Project-scoped notes, pinned messages, and to-dos.</SheetDescription>
+          <div className="flex items-center justify-between gap-2">
+            <ToggleGroup
+              aria-label="Scratch notes sections"
+              size="xs"
+              variant="outline"
+              value={[activeTab]}
+              onValueChange={(value) => {
+                const next = value[0];
+                if (next === "notes" || next === "todos") {
+                  setActiveTab(next);
+                }
+              }}
+            >
+              <Toggle aria-label="Show notes" value="notes">
+                Notes
+              </Toggle>
+              <Toggle aria-label="Show to-dos" value="todos">
+                To-dos
+              </Toggle>
+            </ToggleGroup>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                if (activeTab === "notes") {
+                  addNote();
+                  return;
+                }
+                addTodo();
+              }}
+            >
               <PlusIcon className="size-3" />
-              Add note
+              {activeTab === "notes" ? "Add note" : "Add to-do"}
             </Button>
           </div>
         </SheetHeader>
         <SheetPanel>
-          {notes.length === 0 ? (
+          {activeTab === "notes" && notes.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-3 py-12 text-center text-muted-foreground/60">
-              <StickyNoteIcon className="size-8 opacity-40" />
-              <p className="text-xs">
-                No notes yet. Add a freeform note or pin an assistant message.
-              </p>
+              {emptyStateIcon}
+              <p className="text-xs">{emptyStateCopy}</p>
             </div>
-          ) : (
+          ) : activeTab === "todos" && todos.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-12 text-center text-muted-foreground/60">
+              {emptyStateIcon}
+              <p className="text-xs">{emptyStateCopy}</p>
+            </div>
+          ) : activeTab === "notes" ? (
             <div className="space-y-3">
               {notes.map((note) => (
                 <ScratchNoteCard
@@ -56,6 +102,17 @@ export default function ScratchNotesSheet({
                   note={note}
                   onUpdate={updateNote}
                   onDelete={deleteNote}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {todos.map((todo) => (
+                <ScratchTodoCard
+                  key={todo.id}
+                  todo={todo}
+                  onUpdate={updateTodo}
+                  onDelete={deleteTodo}
                 />
               ))}
             </div>

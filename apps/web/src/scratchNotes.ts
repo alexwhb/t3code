@@ -24,7 +24,22 @@ export interface PinnedMessage {
   updatedAt: string;
 }
 
+export interface ScratchTodo {
+  id: string;
+  content: string;
+  completed: boolean;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
 export type ScratchNote = FreeformNote | PinnedMessage;
+export type ScratchNotesTab = "notes" | "todos";
+
+export interface ScratchWorkspaceData {
+  notes: readonly ScratchNote[];
+  todos: readonly ScratchTodo[];
+}
 
 export interface PinMessageParams {
   messageId: string;
@@ -45,9 +60,14 @@ function storageKey(projectCwd: string): string {
 
 let listeners: Array<() => void> = [];
 let cachedRawByProject = new Map<string, string | null>();
-let cachedSnapshotByProject = new Map<string, readonly ScratchNote[]>();
+let cachedSnapshotByProject = new Map<string, ScratchWorkspaceData>();
 
 const EMPTY_NOTES: readonly ScratchNote[] = [];
+const EMPTY_TODOS: readonly ScratchTodo[] = [];
+const EMPTY_WORKSPACE_DATA: ScratchWorkspaceData = {
+  notes: EMPTY_NOTES,
+  todos: EMPTY_TODOS,
+};
 
 function emitChange(): void {
   for (const listener of listeners) {
@@ -55,34 +75,46 @@ function emitChange(): void {
   }
 }
 
-function parseNotes(raw: string | null): readonly ScratchNote[] {
-  if (!raw) return EMPTY_NOTES;
+export function parseScratchWorkspaceData(raw: string | null): ScratchWorkspaceData {
+  if (!raw) return EMPTY_WORKSPACE_DATA;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return EMPTY_NOTES;
-    return parsed as ScratchNote[];
+    if (Array.isArray(parsed)) {
+      return {
+        notes: parsed as ScratchNote[],
+        todos: EMPTY_TODOS,
+      };
+    }
+    if (parsed && typeof parsed === "object") {
+      const workspaceData = parsed as Partial<ScratchWorkspaceData>;
+      return {
+        notes: Array.isArray(workspaceData.notes) ? workspaceData.notes : EMPTY_NOTES,
+        todos: Array.isArray(workspaceData.todos) ? workspaceData.todos : EMPTY_TODOS,
+      };
+    }
+    return EMPTY_WORKSPACE_DATA;
   } catch {
-    return EMPTY_NOTES;
+    return EMPTY_WORKSPACE_DATA;
   }
 }
 
-function getNotesSnapshot(projectCwd: string | null): readonly ScratchNote[] {
-  if (typeof window === "undefined" || !projectCwd) return EMPTY_NOTES;
+function getNotesSnapshot(projectCwd: string | null): ScratchWorkspaceData {
+  if (typeof window === "undefined" || !projectCwd) return EMPTY_WORKSPACE_DATA;
 
   const key = storageKey(projectCwd);
   const raw = window.localStorage.getItem(key);
 
   if (raw === cachedRawByProject.get(projectCwd)) {
-    return cachedSnapshotByProject.get(projectCwd) ?? EMPTY_NOTES;
+    return cachedSnapshotByProject.get(projectCwd) ?? EMPTY_WORKSPACE_DATA;
   }
 
-  const notes = parseNotes(raw);
+  const notes = parseScratchWorkspaceData(raw);
   cachedRawByProject.set(projectCwd, raw);
   cachedSnapshotByProject.set(projectCwd, notes);
   return notes;
 }
 
-function persistNotes(projectCwd: string, notes: readonly ScratchNote[]): void {
+function persistNotes(projectCwd: string, notes: ScratchWorkspaceData): void {
   if (typeof window === "undefined") return;
 
   const key = storageKey(projectCwd);
@@ -123,11 +155,12 @@ function subscribe(listener: () => void): () => void {
 const MAX_SNAPSHOT_LENGTH = 2000;
 
 export function useScratchNotes(projectCwd: string | null) {
-  const notes = useSyncExternalStore(
+  const workspaceData = useSyncExternalStore(
     subscribe,
     () => getNotesSnapshot(projectCwd),
-    () => EMPTY_NOTES,
+    () => EMPTY_WORKSPACE_DATA,
   );
+  const { notes, todos } = workspaceData;
 
   const addNote = useCallback(() => {
     if (!projectCwd) return;
@@ -140,7 +173,29 @@ export function useScratchNotes(projectCwd: string | null) {
       updatedAt: now,
     };
     const current = getNotesSnapshot(projectCwd);
-    persistNotes(projectCwd, [note, ...current]);
+    persistNotes(projectCwd, {
+      ...current,
+      notes: [note, ...current.notes],
+    });
+    emitChange();
+  }, [projectCwd]);
+
+  const addTodo = useCallback(() => {
+    if (!projectCwd) return;
+    const now = new Date().toISOString();
+    const todo: ScratchTodo = {
+      id: crypto.randomUUID(),
+      content: "",
+      completed: false,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    };
+    const current = getNotesSnapshot(projectCwd);
+    persistNotes(projectCwd, {
+      ...current,
+      todos: [todo, ...current.todos],
+    });
     emitChange();
   }, [projectCwd]);
 
@@ -160,7 +215,10 @@ export function useScratchNotes(projectCwd: string | null) {
         updatedAt: now,
       };
       const current = getNotesSnapshot(projectCwd);
-      persistNotes(projectCwd, [note, ...current]);
+      persistNotes(projectCwd, {
+        ...current,
+        notes: [note, ...current.notes],
+      });
       emitChange();
     },
     [projectCwd],
@@ -170,7 +228,7 @@ export function useScratchNotes(projectCwd: string | null) {
     (noteId: string, patch: { content?: string; annotation?: string }) => {
       if (!projectCwd) return;
       const current = getNotesSnapshot(projectCwd);
-      const updated = current.map((note) => {
+      const updated = current.notes.map((note) => {
         if (note.id !== noteId) return note;
         const now = new Date().toISOString();
         if (note.kind === "freeform" && patch.content !== undefined) {
@@ -181,7 +239,35 @@ export function useScratchNotes(projectCwd: string | null) {
         }
         return note;
       });
-      persistNotes(projectCwd, updated);
+      persistNotes(projectCwd, {
+        ...current,
+        notes: updated,
+      });
+      emitChange();
+    },
+    [projectCwd],
+  );
+
+  const updateTodo = useCallback(
+    (todoId: string, patch: { content?: string; completed?: boolean }) => {
+      if (!projectCwd) return;
+      const current = getNotesSnapshot(projectCwd);
+      const updated = current.todos.map((todo) => {
+        if (todo.id !== todoId) return todo;
+        const now = new Date().toISOString();
+        const completed = patch.completed ?? todo.completed;
+        return {
+          ...todo,
+          ...(patch.content !== undefined ? { content: patch.content } : {}),
+          ...(patch.completed !== undefined ? { completed } : {}),
+          completedAt: patch.completed !== undefined ? (completed ? now : null) : todo.completedAt,
+          updatedAt: now,
+        };
+      });
+      persistNotes(projectCwd, {
+        ...current,
+        todos: updated,
+      });
       emitChange();
     },
     [projectCwd],
@@ -191,14 +277,37 @@ export function useScratchNotes(projectCwd: string | null) {
     (noteId: string) => {
       if (!projectCwd) return;
       const current = getNotesSnapshot(projectCwd);
-      persistNotes(
-        projectCwd,
-        current.filter((note) => note.id !== noteId),
-      );
+      persistNotes(projectCwd, {
+        ...current,
+        notes: current.notes.filter((note) => note.id !== noteId),
+      });
       emitChange();
     },
     [projectCwd],
   );
 
-  return { notes, addNote, pinMessage, updateNote, deleteNote } as const;
+  const deleteTodo = useCallback(
+    (todoId: string) => {
+      if (!projectCwd) return;
+      const current = getNotesSnapshot(projectCwd);
+      persistNotes(projectCwd, {
+        ...current,
+        todos: current.todos.filter((todo) => todo.id !== todoId),
+      });
+      emitChange();
+    },
+    [projectCwd],
+  );
+
+  return {
+    notes,
+    todos,
+    addNote,
+    addTodo,
+    pinMessage,
+    updateNote,
+    updateTodo,
+    deleteNote,
+    deleteTodo,
+  } as const;
 }
