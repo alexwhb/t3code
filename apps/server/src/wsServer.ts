@@ -352,7 +352,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           }
 
           const rawBytes = Buffer.from(parsed.base64, "base64");
-          if (rawBytes.byteLength === 0 || rawBytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+          if (
+            rawBytes.byteLength === 0 ||
+            rawBytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
+          ) {
             return yield* new RouteRequestError({
               message: `Image attachment '${attachment.name}' is empty or too large.`,
             });
@@ -637,12 +640,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     providerService.streamEvents.pipe(
       Stream.filter((event) => event.type === "account.rate-limits.updated"),
     ),
-    (event) =>
-      broadcastPush({
-        type: "push",
-        channel: WS_CHANNELS.providerRateLimitsUpdated,
-        data: event.payload,
-      }),
+    (event) => pushBus.publishAll(WS_CHANNELS.providerRateLimitsUpdated, event.payload),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);

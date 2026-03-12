@@ -452,11 +452,20 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
     const output = context.output!;
     const child = context.child!;
 
+    // Capture the turn ID at attachment time so the exit handler only
+    // operates on the turn that was active when this child was spawned.
+    // This prevents a race where a stale child's exit handler clobbers
+    // state belonging to a newer child spawned by a subsequent sendTurn().
+    const boundTurnId = context.currentTurnId;
+
     output.on("line", (line) => {
+      // Ignore lines from a stale child whose output was superseded.
+      if (context.child !== child) return;
       this.handleStdoutLine(context, line);
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
+      if (context.child !== child) return;
       const raw = chunk.toString();
       const lines = raw.split(/\r?\n/g);
       for (const rawLine of lines) {
@@ -467,12 +476,25 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
     });
 
     child.on("error", (error) => {
+      if (context.child !== child) return;
       const message = error.message || "Claude Code process errored.";
       this.updateSession(context, { status: "error", lastError: message });
       this.emitErrorEvent(context, "process/error", message);
     });
 
     child.on("exit", (code, signal) => {
+      // Only clean up resources if this child is still the active one.
+      // A newer sendTurn() may have already replaced context.child/output;
+      // closing the new child's readline or nulling its reference would
+      // leave the session stuck in "running" with no way to receive events
+      // or interrupt the process.
+      const isStaleChild = context.child !== child;
+      if (isStaleChild) {
+        // Still close our own readline to avoid leaking resources.
+        output.close();
+        return;
+      }
+
       context.output?.close();
       context.output = null;
       context.child = null;
@@ -626,7 +648,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
             if (toolNameLower === "write" || toolNameLower === "edit") {
               const toolInput = asObject(b.input);
               const filePath = asString(toolInput?.file_path);
-              if (filePath && /[/\\]\.claude[/\\]plans[/\\]/.test(filePath)) {
+              if (isClaudePlanFilePath(filePath)) {
                 context.planFilePath = filePath;
                 // For Write we can capture full content directly; Edit only has old/new strings
                 if (toolNameLower === "write") {
@@ -917,7 +939,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
               // File may have been removed or unreadable – fall through
             }
           }
-          if (planFromFile && planFromFile.length > 0) {
+          if (isStructuredPlanMarkdown(planFromFile)) {
             context.planProposedEmitted = true;
             this.emitEvent({
               id: EventId.makeUnsafe(randomUUID()),
@@ -953,6 +975,24 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
             result: event,
           },
         });
+
+        // If Claude promised a follow-up it can't deliver in one-shot mode,
+        // suggest a status-check turn the user can trigger from the UI.
+        if (context.conversationId && detectsFollowUpPromise(context.assistantTextBuffer)) {
+          this.emitEvent({
+            id: EventId.makeUnsafe(randomUUID()),
+            kind: "notification",
+            provider: "claudeCode",
+            threadId,
+            createdAt: now,
+            method: "turn/followUpSuggested",
+            turnId,
+            payload: {
+              suggestedPrompt:
+                "Check on the status of the task you were working on. If it's done, summarize the result. If not, report current progress.",
+            },
+          });
+        }
         break;
       }
 
@@ -1035,6 +1075,42 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function isClaudePlanFilePath(filePath: string | undefined): filePath is string {
+  return (
+    typeof filePath === "string" &&
+    /(?:^|[/\\])\.claude[/\\]plans[/\\]/.test(filePath) &&
+    /\.md$/i.test(filePath)
+  );
+}
+
+function isStructuredPlanMarkdown(markdown: string | undefined): boolean {
+  const trimmed = markdown?.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const nonEmptyLines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (nonEmptyLines.length === 0) {
+    return false;
+  }
+
+  if (nonEmptyLines.some((line) => /^\s{0,3}#{1,6}\s+\S/.test(line))) {
+    return true;
+  }
+
+  let listItemCount = 0;
+  for (const line of nonEmptyLines) {
+    if (/^\s*(?:[-*+]|\d+[.)]|[a-zA-Z][.)]|\[[ xX]\])\s+\S/.test(line)) {
+      listItemCount += 1;
+      if (listItemCount >= 2) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function mapToolType(toolName: string | undefined): string {
   if (!toolName) return "unknown";
   const lower = toolName.toLowerCase();
@@ -1051,6 +1127,24 @@ function mapToolType(toolName: string | undefined): string {
     return "mcpToolCall";
   }
   return "toolCall";
+}
+
+/**
+ * Detects whether the assistant response contains a promise to follow up
+ * that cannot be fulfilled in one-shot (--print) mode.
+ */
+const FOLLOW_UP_PATTERNS = [
+  /\bi(?:['\u2019]ll| will)\s+(?:let you know|check (?:back|on)|follow up|update you|monitor|keep (?:you posted|an eye))/i,
+  /\bonce\s+(?:it(?:['\u2019]s| is)|that(?:['\u2019]s| is)|the\s+\w+\s+is)\s+(?:done|finished|complete|deployed|ready)/i,
+  /\bwill\s+(?:take|need)\s+(?:a\s+(?:few|couple)|some)\s+(?:minutes|seconds|moments)/i,
+  /\bwaiting\s+for\s+(?:the|it|this|that)\b.*?\bto\s+(?:finish|complete|deploy)/i,
+];
+
+export function detectsFollowUpPromise(text: string): boolean {
+  // Only inspect the tail of the response to reduce false positives from
+  // earlier conversational context.
+  const tail = text.slice(-1500);
+  return FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(tail));
 }
 
 export function buildClaudeArgs(input: {
@@ -1076,6 +1170,13 @@ export function buildClaudeArgs(input: {
   if (conversationId) {
     args.push("--resume", conversationId);
   }
+
+  // Claude Code runs in one-shot (--print) mode. Instruct it not to
+  // promise follow-ups it cannot deliver.
+  args.push(
+    "--append-system-prompt",
+    "You run in one-shot mode. Each response is a separate invocation — you cannot send follow-up messages after your response ends. Never promise to 'let you know', 'check back', or 'follow up later'. Instead, give the user a command they can run to check status, or summarize what to look for.",
+  );
 
   // When images are present, use stream-json input so we can send
   // structured content blocks (text + images) via stdin.

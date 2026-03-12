@@ -1,5 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { type ProviderEvent, ThreadId } from "@t3tools/contracts";
@@ -9,6 +12,7 @@ import {
   buildClaudeArgs,
   ClaudeCodeManager,
   type ClaudeCodeManagerOptions,
+  detectsFollowUpPromise,
 } from "./claudeCodeManager";
 
 afterEach(() => {
@@ -58,22 +62,28 @@ function makeFakeChildProcess(): FakeChildProcess {
 
 describe("buildClaudeArgs", () => {
   it("builds a print-mode stream-json invocation for a new turn", () => {
-    expect(
-      buildClaudeArgs({
-        model: "sonnet",
-        runtimeMode: "full-access",
-        prompt: "Reply with OK",
-      }),
-    ).toEqual([
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--model",
-      "sonnet",
-      "--dangerously-skip-permissions",
-      "--print",
-      "Reply with OK",
-    ]);
+    const args = buildClaudeArgs({
+      model: "sonnet",
+      runtimeMode: "full-access",
+      prompt: "Reply with OK",
+    });
+    expect(args).toContain("--output-format");
+    expect(args).toContain("stream-json");
+    expect(args).toContain("--verbose");
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).toContain("--print");
+    expect(args).toContain("Reply with OK");
+  });
+
+  it("includes --append-system-prompt for one-shot mode instruction", () => {
+    const args = buildClaudeArgs({
+      model: "sonnet",
+      runtimeMode: "full-access",
+      prompt: "Hello",
+    });
+    const idx = args.indexOf("--append-system-prompt");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toContain("one-shot mode");
   });
 
   it("resumes a specific conversation with --resume", () => {
@@ -129,6 +139,30 @@ describe("buildClaudeArgs", () => {
 
     expect(args).not.toContain("--permission-mode");
     expect(args).toContain("--dangerously-skip-permissions");
+  });
+});
+
+describe("detectsFollowUpPromise", () => {
+  it("returns true when Claude promises to follow up", () => {
+    expect(detectsFollowUpPromise("I'll let you know when the deployment is done.")).toBe(true);
+    expect(detectsFollowUpPromise("I will check back once it's finished.")).toBe(true);
+    expect(detectsFollowUpPromise("I'll follow up when it's ready.")).toBe(true);
+    expect(detectsFollowUpPromise("I'll keep you posted on the progress.")).toBe(true);
+    expect(detectsFollowUpPromise("Waiting for the build to finish.")).toBe(true);
+  });
+
+  it("returns false for normal completions", () => {
+    expect(detectsFollowUpPromise("The deployment completed successfully.")).toBe(false);
+    expect(detectsFollowUpPromise("Here are the results of the build.")).toBe(false);
+    expect(detectsFollowUpPromise("Done! The changes have been deployed.")).toBe(false);
+  });
+
+  it("only inspects the tail of the response", () => {
+    const longPrefix = "Some earlier text. ".repeat(120); // ~2280 chars
+    // Pattern buried far from the end should not trigger.
+    expect(detectsFollowUpPromise("I'll let you know when it's done. " + longPrefix)).toBe(false);
+    // Pattern near the end should trigger.
+    expect(detectsFollowUpPromise(longPrefix + " I'll let you know when it's done.")).toBe(true);
   });
 });
 
@@ -191,7 +225,6 @@ describe("ClaudeCodeManager", () => {
     });
 
     expect(spawnProcess).toHaveBeenCalledTimes(1);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const args = (spawnProcess as any).mock.calls[0]![1] as string[];
     expect(args).toContain("--input-format");
     expect(args).toContain("stream-json");
@@ -468,6 +501,176 @@ describe("ClaudeCodeManager", () => {
 
     const planEvent = events.find((e) => e.method === "item/plan/proposed");
     expect(planEvent).toBeUndefined();
+  });
+
+  it("emits a fallback plan event for structured markdown written to .claude/plans", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-plan-file-fallback");
+    const events: ProviderEvent[] = [];
+
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.startSession({
+      threadId,
+      cwd: mkdtempSync(join(tmpdir(), "t3code-claude-plan-")),
+      runtimeMode: "full-access",
+    });
+
+    await manager.sendTurn({
+      threadId,
+      input: "Plan the refactor",
+      interactionMode: "plan",
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-plan-file-fallback",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-write-plan",
+              name: "Write",
+              input: {
+                file_path: ".claude/plans/refactor-plan.md",
+                content: "## Refactor Plan\n\n1. Extract shared logic\n2. Add tests",
+              },
+            },
+          ],
+        },
+      })}\n`,
+    );
+    child.stdout.write(`${JSON.stringify({ type: "result" })}\n`);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const planEvent = events.find((e) => e.method === "item/plan/proposed");
+    expect(planEvent?.payload).toEqual({
+      planMarkdown: "## Refactor Plan\n\n1. Extract shared logic\n2. Add tests",
+    });
+  });
+
+  it("does not emit a fallback plan event for unstructured text written to .claude/plans", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-plan-file-plain-text");
+    const events: ProviderEvent[] = [];
+
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.startSession({
+      threadId,
+      cwd: mkdtempSync(join(tmpdir(), "t3code-claude-plan-")),
+      runtimeMode: "full-access",
+    });
+
+    await manager.sendTurn({
+      threadId,
+      input: "Plan the refactor",
+      interactionMode: "plan",
+    });
+
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-plan-file-plain-text",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-write-plan",
+              name: "Write",
+              input: {
+                file_path: ".claude/plans/refactor-plan.md",
+                content:
+                  "Let me explore the existing patterns for data import/export and the current entitlement creation flow.",
+              },
+            },
+          ],
+        },
+      })}\n`,
+    );
+    child.stdout.write(`${JSON.stringify({ type: "result" })}\n`);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const planEvent = events.find((e) => e.method === "item/plan/proposed");
+    expect(planEvent).toBeUndefined();
+  });
+
+  it("does not clobber new child when old child exits after sendTurn replaces it", async () => {
+    const child1 = makeFakeChildProcess();
+    const child2 = makeFakeChildProcess();
+    let callCount = 0;
+    const spawnProcess = vi.fn(() => {
+      callCount++;
+      return callCount === 1 ? child1 : child2;
+    }) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>;
+    const manager = new ClaudeCodeManager({
+      spawnProcess,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-stale-exit");
+    const events: ProviderEvent[] = [];
+
+    manager.on("event", (event) => {
+      events.push(event);
+    });
+
+    await manager.startSession({ threadId, runtimeMode: "full-access" });
+
+    // Start first turn
+    await manager.sendTurn({ threadId, input: "Turn 1" });
+
+    // Start second turn before the first child exits — this kills child1
+    // and replaces context.child/output with child2's handles.
+    await manager.sendTurn({ threadId, input: "Turn 2" });
+
+    // Old child exits asynchronously. Before the fix this would close
+    // child2's readline and null out context.child.
+    child1.emit("exit", null, "SIGTERM");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // child2 should still be able to produce events
+    child2.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-turn2",
+          content: [{ type: "text", text: "Turn 2 response" }],
+        },
+      })}\n`,
+    );
+    child2.stdout.write(`${JSON.stringify({ type: "result", session_id: "session-456" })}\n`);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The turn/completed from child2's result should exist with the correct turnId
+    const turnCompletedEvents = events.filter((e) => e.method === "turn/completed");
+    const resultTurnCompleted = turnCompletedEvents.find(
+      (e) => (e.payload as any)?.turn?.status === "completed",
+    );
+    expect(resultTurnCompleted).toBeDefined();
+
+    // Session should be ready (not stuck in "running")
+    const sessions = manager.listSessions();
+    expect(sessions[0]).toMatchObject({ status: "ready" });
+
+    // The assistant message delta from child2 should have been received
+    const deltas = events.filter((e) => e.method === "item/agentMessage/delta");
+    expect(deltas.length).toBeGreaterThan(0);
   });
 
   it("does not emit plan event for plain text when interactionMode is default", async () => {

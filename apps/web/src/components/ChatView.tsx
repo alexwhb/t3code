@@ -52,7 +52,11 @@ import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 
 import { isElectron } from "../env";
-import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
+import {
+  parseDiffRouteSearch,
+  setDiffOpenInSearch,
+  stripDiffSearchParams,
+} from "../diffRouteSearch";
 import {
   type ComposerSlashCommand,
   type ComposerTrigger,
@@ -69,6 +73,7 @@ import {
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  deriveFollowUpSuggestion,
   findLatestProposedPlan,
   type PendingApproval,
   type PendingUserInput,
@@ -77,6 +82,7 @@ import {
   deriveWorkLogEntries,
   hasToolActivityForTurn,
   isLatestTurnSettled,
+  isPlanFilePath,
   formatElapsed,
   formatTimestamp,
 } from "../session-logic";
@@ -597,7 +603,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const { settings } = useAppSettings();
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
-  const sttProvider = (settings.sttProvider || "whisper") as import("../sttProviders").SttProviderKind;
+  const sttProvider = (settings.sttProvider ||
+    "whisper") as import("../sttProviders").SttProviderKind;
   const stt = useSpeechToText({
     provider: sttProvider,
     onTranscript: useCallback(
@@ -1060,12 +1067,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
   const activeProposedPlan = useMemo(() => {
-    if (!latestTurnSettled) {
-      return null;
-    }
+    // During in-progress turns, show the latest plan from any turn
+    // so the plan sidebar stays visible during feedback processing.
     return findLatestProposedPlan(
       activeThread?.proposedPlans ?? [],
-      activeLatestTurn?.turnId ?? null,
+      latestTurnSettled ? (activeLatestTurn?.turnId ?? null) : null,
     );
   }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
   const activePlan = useMemo(
@@ -1073,15 +1079,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
     [activeLatestTurn?.turnId, threadActivities],
   );
   const showPlanFollowUpPrompt =
-    pendingUserInputs.length === 0 &&
-    interactionMode === "plan" &&
-    latestTurnSettled &&
-    activeProposedPlan !== null;
+    pendingUserInputs.length === 0 && interactionMode === "plan" && latestTurnSettled;
+  const followUpSuggestion = useMemo(
+    () => deriveFollowUpSuggestion(threadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, threadActivities],
+  );
   const activePendingApproval = pendingApprovals[0] ?? null;
   const isComposerApprovalState = activePendingApproval !== null;
   const hasComposerHeader =
     isComposerApprovalState ||
-    (showPlanFollowUpPrompt && activeProposedPlan !== null);
+    showPlanFollowUpPrompt ||
+    (followUpSuggestion !== null && !isWorking);
   const composerFooterHasWideActions = showPlanFollowUpPrompt;
   useEffect(() => {
     if (!activePendingProgress) {
@@ -1452,8 +1460,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
       params: { threadId },
       replace: true,
       search: (previous) => {
-        const rest = stripDiffSearchParams(previous);
-        return diffOpen ? rest : { ...rest, diff: "1" };
+        if (diffOpen) {
+          return setDiffOpenInSearch(previous, false) as unknown as ReturnType<
+            typeof parseDiffRouteSearch
+          >;
+        }
+        return setDiffOpenInSearch(previous, true);
       },
     });
   }, [diffOpen, navigate, threadId]);
@@ -2611,20 +2623,34 @@ export default function ChatView({ threadId }: ChatViewProps) {
       return;
     }
     const trimmed = prompt.trim();
-    if (showPlanFollowUpPrompt && activeProposedPlan) {
-      const followUp = resolvePlanFollowUpSubmission({
-        draftText: trimmed,
-        planMarkdown: activeProposedPlan.planMarkdown,
-      });
-      promptRef.current = "";
-      clearComposerDraftContent(activeThread.id);
-      setComposerHighlightedItemId(null);
-      setComposerCursor(0);
-      setComposerTrigger(null);
-      await onSubmitPlanFollowUp({
-        text: followUp.text,
-        interactionMode: followUp.interactionMode,
-      });
+    if (showPlanFollowUpPrompt) {
+      if (activeProposedPlan) {
+        const followUp = resolvePlanFollowUpSubmission({
+          draftText: trimmed,
+          planMarkdown: activeProposedPlan.planMarkdown,
+        });
+        promptRef.current = "";
+        clearComposerDraftContent(activeThread.id);
+        setComposerHighlightedItemId(null);
+        setComposerCursor(0);
+        setComposerTrigger(null);
+        await onSubmitPlanFollowUp({
+          text: followUp.text,
+          interactionMode: followUp.interactionMode,
+        });
+      } else {
+        // No plan yet — user is answering Claude's question in plan mode
+        if (!trimmed) return;
+        promptRef.current = "";
+        clearComposerDraftContent(activeThread.id);
+        setComposerHighlightedItemId(null);
+        setComposerCursor(0);
+        setComposerTrigger(null);
+        await onSubmitPlanFollowUp({
+          text: trimmed,
+          interactionMode: "plan",
+        });
+      }
       return;
     }
     const standaloneSlashCommand =
@@ -3153,133 +3179,142 @@ export default function ChatView({ threadId }: ChatViewProps) {
     ],
   );
 
-  const onImplementPlanInNewThread = useCallback(async (targetProvider?: ProviderKind) => {
-    const api = readNativeApi();
-    if (
-      !api ||
-      !activeThread ||
-      !activeProject ||
-      !activeProposedPlan ||
-      !isServerThread ||
-      isSendBusy ||
-      isConnecting ||
-      sendInFlightRef.current
-    ) {
-      return;
-    }
+  const onImplementPlanInNewThread = useCallback(
+    async (targetProvider?: ProviderKind) => {
+      const api = readNativeApi();
+      if (
+        !api ||
+        !activeThread ||
+        !activeProject ||
+        !activeProposedPlan ||
+        !isServerThread ||
+        isSendBusy ||
+        isConnecting ||
+        sendInFlightRef.current
+      ) {
+        return;
+      }
 
-    const createdAt = new Date().toISOString();
-    const nextThreadId = newThreadId();
-    const planMarkdown = activeProposedPlan.planMarkdown;
-    const implementationPrompt = buildPlanImplementationPrompt(planMarkdown);
-    const nextThreadTitle = truncateTitle(buildPlanImplementationThreadTitle(planMarkdown));
-    const effectiveProvider = targetProvider ?? selectedProvider;
-    const isProviderOverride = targetProvider != null && targetProvider !== selectedProvider;
-    const nextThreadModel: ModelSlug = isProviderOverride
-      ? DEFAULT_MODEL_BY_PROVIDER[targetProvider]
-      : selectedModel ||
-        (activeThread.model as ModelSlug) ||
-        (activeProject.model as ModelSlug) ||
-        DEFAULT_MODEL_BY_PROVIDER[effectiveProvider];
+      const createdAt = new Date().toISOString();
+      const nextThreadId = newThreadId();
+      const planMarkdown = activeProposedPlan.planMarkdown;
+      const implementationPrompt = buildPlanImplementationPrompt(planMarkdown);
+      const nextThreadTitle = truncateTitle(buildPlanImplementationThreadTitle(planMarkdown));
+      const effectiveProvider = targetProvider ?? selectedProvider;
+      const isProviderOverride = targetProvider != null && targetProvider !== selectedProvider;
+      const nextThreadModel: ModelSlug = isProviderOverride
+        ? DEFAULT_MODEL_BY_PROVIDER[targetProvider]
+        : selectedModel ||
+          (activeThread.model as ModelSlug) ||
+          (activeProject.model as ModelSlug) ||
+          DEFAULT_MODEL_BY_PROVIDER[effectiveProvider];
 
-    sendInFlightRef.current = true;
-    beginSendPhase("sending-turn");
-    const finish = () => {
-      sendInFlightRef.current = false;
-      resetSendPhase();
-    };
+      sendInFlightRef.current = true;
+      beginSendPhase("sending-turn");
+      const finish = () => {
+        sendInFlightRef.current = false;
+        resetSendPhase();
+      };
 
-    await api.orchestration
-      .dispatchCommand({
-        type: "thread.create",
-        commandId: newCommandId(),
-        threadId: nextThreadId,
-        projectId: activeProject.id,
-        title: nextThreadTitle,
-        model: nextThreadModel,
-        runtimeMode,
-        interactionMode: "default",
-        branch: activeThread.branch,
-        worktreePath: activeThread.worktreePath,
-        createdAt,
-      })
-      .then(() => {
-        return api.orchestration.dispatchCommand({
-          type: "thread.turn.start",
+      await api.orchestration
+        .dispatchCommand({
+          type: "thread.create",
           commandId: newCommandId(),
           threadId: nextThreadId,
-          message: {
-            messageId: newMessageId(),
-            role: "user",
-            text: implementationPrompt,
-            attachments: [],
-          },
-          provider: effectiveProvider,
-          model: isProviderOverride ? DEFAULT_MODEL_BY_PROVIDER[targetProvider] : selectedModel || undefined,
-          ...(isProviderOverride
-            ? {}
-            : {
-                ...(selectedModelOptionsForDispatch
-                  ? { modelOptions: selectedModelOptionsForDispatch }
-                  : {}),
-                ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
-              }),
-          assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
+          projectId: activeProject.id,
+          title: nextThreadTitle,
+          model: nextThreadModel,
           runtimeMode,
           interactionMode: "default",
+          branch: activeThread.branch,
+          worktreePath: activeThread.worktreePath,
           createdAt,
-        });
-      })
-      .then(() => api.orchestration.getSnapshot())
-      .then((snapshot) => {
-        syncServerReadModel(snapshot);
-        // Signal that the plan sidebar should open on the new thread.
-        planSidebarOpenOnNextThreadRef.current = true;
-        return navigate({
-          to: "/$threadId",
-          params: { threadId: nextThreadId },
-        });
-      })
-      .catch(async (err) => {
-        await api.orchestration
-          .dispatchCommand({
-            type: "thread.delete",
+        })
+        .then(() => {
+          return api.orchestration.dispatchCommand({
+            type: "thread.turn.start",
             commandId: newCommandId(),
             threadId: nextThreadId,
-          })
-          .catch(() => undefined);
-        await api.orchestration
-          .getSnapshot()
-          .then((snapshot) => {
-            syncServerReadModel(snapshot);
-          })
-          .catch(() => undefined);
-        toastManager.add({
-          type: "error",
-          title: "Could not start implementation thread",
-          description:
-            err instanceof Error ? err.message : "An error occurred while creating the new thread.",
-        });
-      })
-      .then(finish, finish);
-  }, [
-    activeProject,
-    activeProposedPlan,
-    activeThread,
-    beginSendPhase,
-    isConnecting,
-    isSendBusy,
-    isServerThread,
-    navigate,
-    resetSendPhase,
-    runtimeMode,
-    selectedModel,
-    selectedModelOptionsForDispatch,
-    providerOptionsForDispatch,
-    selectedProvider,
-    settings.enableAssistantStreaming,
-    syncServerReadModel,
-  ]);
+            message: {
+              messageId: newMessageId(),
+              role: "user",
+              text: implementationPrompt,
+              attachments: [],
+            },
+            provider: effectiveProvider,
+            model: isProviderOverride
+              ? DEFAULT_MODEL_BY_PROVIDER[targetProvider]
+              : selectedModel || undefined,
+            ...(isProviderOverride
+              ? {}
+              : {
+                  ...(selectedModelOptionsForDispatch
+                    ? { modelOptions: selectedModelOptionsForDispatch }
+                    : {}),
+                  ...(providerOptionsForDispatch
+                    ? { providerOptions: providerOptionsForDispatch }
+                    : {}),
+                }),
+            assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
+            runtimeMode,
+            interactionMode: "default",
+            createdAt,
+          });
+        })
+        .then(() => api.orchestration.getSnapshot())
+        .then((snapshot) => {
+          syncServerReadModel(snapshot);
+          // Signal that the plan sidebar should open on the new thread.
+          planSidebarOpenOnNextThreadRef.current = true;
+          return navigate({
+            to: "/$threadId",
+            params: { threadId: nextThreadId },
+          });
+        })
+        .catch(async (err) => {
+          await api.orchestration
+            .dispatchCommand({
+              type: "thread.delete",
+              commandId: newCommandId(),
+              threadId: nextThreadId,
+            })
+            .catch(() => undefined);
+          await api.orchestration
+            .getSnapshot()
+            .then((snapshot) => {
+              syncServerReadModel(snapshot);
+            })
+            .catch(() => undefined);
+          toastManager.add({
+            type: "error",
+            title: "Could not start implementation thread",
+            description:
+              err instanceof Error
+                ? err.message
+                : "An error occurred while creating the new thread.",
+          });
+        })
+        .then(finish, finish);
+    },
+    [
+      activeProject,
+      activeProposedPlan,
+      activeThread,
+      beginSendPhase,
+      isConnecting,
+      isSendBusy,
+      isServerThread,
+      navigate,
+      resetSendPhase,
+      runtimeMode,
+      selectedModel,
+      selectedModelOptionsForDispatch,
+      providerOptionsForDispatch,
+      selectedProvider,
+      settings.enableAssistantStreaming,
+      syncServerReadModel,
+    ],
+  );
 
   const openPlanReviewThread = useCallback(
     (planMarkdown: string) => {
@@ -3760,12 +3795,36 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       pendingCount={pendingApprovals.length}
                     />
                   </div>
-                ) : showPlanFollowUpPrompt && activeProposedPlan ? (
+                ) : showPlanFollowUpPrompt ? (
                   <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
                     <ComposerPlanFollowUpBanner
-                      key={activeProposedPlan.id}
-                      planTitle={proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null}
+                      key={activeProposedPlan?.id ?? "plan-mode-active"}
+                      planTitle={
+                        activeProposedPlan
+                          ? (proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null)
+                          : null
+                      }
                     />
+                  </div>
+                ) : followUpSuggestion && !isWorking ? (
+                  <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
+                    <div className="flex items-center gap-2 px-4 py-2.5 text-sm text-muted-foreground">
+                      <span className="flex-1 truncate">
+                        Claude indicated it would follow up but can&apos;t in one-shot mode.
+                      </span>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded-md bg-primary/10 px-3 py-1 text-xs font-medium text-primary hover:bg-primary/20 transition-colors"
+                        onClick={() => {
+                          setComposerDraftPrompt(
+                            activeThread?.id ?? threadId,
+                            followUpSuggestion.suggestedPrompt,
+                          );
+                        }}
+                      >
+                        Check status
+                      </button>
+                    </div>
                   </div>
                 ) : null}
 
@@ -3878,8 +3937,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
                           "Resolve this approval request to continue")
                         : activePendingProgress
                           ? "Type your own answer, or leave this blank to use the selected option"
-                          : showPlanFollowUpPrompt && activeProposedPlan
-                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                          : showPlanFollowUpPrompt
+                            ? activeProposedPlan
+                              ? "Add feedback to refine the plan, or leave this blank to implement it"
+                              : "Reply to continue planning..."
                             : phase === "disconnected"
                               ? "Ask for follow-up changes or attach images"
                               : "Ask anything, @tag files/folders, or use / to show available commands"
@@ -4066,146 +4127,157 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         </button>
                       ) : (
                         <>
-                        {stt.isSupported ? (
-                          <div className="relative flex items-center">
-                            <button
-                              type="button"
-                              className={cn(
-                                "flex size-8 items-center justify-center rounded-full transition-all duration-150",
-                                stt.error
-                                  ? "text-destructive hover:bg-destructive/10"
-                                  : stt.isListening || stt.isTranscribing
-                                    ? "bg-rose-500/90 text-white animate-pulse hover:bg-rose-500"
-                                    : "text-muted-foreground/60 hover:text-foreground/80 hover:bg-accent",
-                              )}
-                              onClick={() => (stt.isListening ? stt.stop() : stt.start())}
-                              title={stt.error ?? (stt.isListening ? "Stop recording" : "Start voice input")}
-                              aria-label={stt.isListening ? "Stop recording" : "Start voice input"}
-                            >
-                              {stt.isListening || stt.isTranscribing ? (
-                                <MicOffIcon className="size-4" />
-                              ) : (
-                                <MicIcon className="size-4" />
-                              )}
-                            </button>
-                          </div>
-                        ) : null}
-                        {showPlanFollowUpPrompt ? (
-                          prompt.trim().length > 0 ? (
-                            <Button
-                              type="submit"
-                              size="sm"
-                              className="h-9 rounded-full px-4 sm:h-8"
-                              disabled={isSendBusy || isConnecting}
-                            >
-                              {isConnecting || isSendBusy ? "Sending..." : "Refine"}
-                            </Button>
-                          ) : (
-                            <div className="flex items-center">
+                          {stt.isSupported ? (
+                            <div className="relative flex items-center">
+                              <button
+                                type="button"
+                                className={cn(
+                                  "flex size-8 items-center justify-center rounded-full transition-all duration-150",
+                                  stt.error
+                                    ? "text-destructive hover:bg-destructive/10"
+                                    : stt.isListening || stt.isTranscribing
+                                      ? "bg-rose-500/90 text-white animate-pulse hover:bg-rose-500"
+                                      : "text-muted-foreground/60 hover:text-foreground/80 hover:bg-accent",
+                                )}
+                                onClick={() => (stt.isListening ? stt.stop() : stt.start())}
+                                title={
+                                  stt.error ??
+                                  (stt.isListening ? "Stop recording" : "Start voice input")
+                                }
+                                aria-label={
+                                  stt.isListening ? "Stop recording" : "Start voice input"
+                                }
+                              >
+                                {stt.isListening || stt.isTranscribing ? (
+                                  <MicOffIcon className="size-4" />
+                                ) : (
+                                  <MicIcon className="size-4" />
+                                )}
+                              </button>
+                            </div>
+                          ) : null}
+                          {showPlanFollowUpPrompt ? (
+                            prompt.trim().length > 0 ? (
                               <Button
                                 type="submit"
                                 size="sm"
-                                className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
+                                className="h-9 rounded-full px-4 sm:h-8"
                                 disabled={isSendBusy || isConnecting}
                               >
-                                {isConnecting || isSendBusy ? "Sending..." : "Implement"}
+                                {isConnecting || isSendBusy
+                                  ? "Sending..."
+                                  : activeProposedPlan
+                                    ? "Refine"
+                                    : "Send"}
                               </Button>
-                              <Menu>
-                                <MenuTrigger
-                                  render={
-                                    <Button
-                                      size="sm"
-                                      variant="default"
-                                      className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
-                                      aria-label="Implementation actions"
-                                      disabled={isSendBusy || isConnecting}
-                                    />
-                                  }
+                            ) : activeProposedPlan ? (
+                              <div className="flex items-center">
+                                <Button
+                                  type="submit"
+                                  size="sm"
+                                  className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
+                                  disabled={isSendBusy || isConnecting}
                                 >
-                                  <ChevronDownIcon className="size-3.5" />
-                                </MenuTrigger>
-                                <MenuPopup align="end" side="top">
-                                  <MenuItem
-                                    disabled={isSendBusy || isConnecting}
-                                    onClick={() => void onImplementPlanInNewThread()}
-                                  >
-                                    Implement in new thread
-                                  </MenuItem>
-                                  <MenuDivider />
-                                  {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
-                                    const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
-                                    return (
-                                      <MenuItem
-                                        key={option.value}
+                                  {isConnecting || isSendBusy ? "Sending..." : "Implement"}
+                                </Button>
+                                <Menu>
+                                  <MenuTrigger
+                                    render={
+                                      <Button
+                                        size="sm"
+                                        variant="default"
+                                        className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
+                                        aria-label="Implementation actions"
                                         disabled={isSendBusy || isConnecting}
-                                        onClick={() => void onImplementPlanInNewThread(option.value)}
-                                      >
-                                        <OptionIcon className="size-4 shrink-0 opacity-80" />
-                                        Implement with {option.label}
-                                      </MenuItem>
-                                    );
-                                  })}
-                                </MenuPopup>
-                              </Menu>
-                            </div>
-                          )
-                        ) : (
-                          <button
-                            type="submit"
-                            className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
-                            disabled={
-                              isSendBusy ||
-                              isConnecting ||
-                              (!prompt.trim() && composerImages.length === 0)
-                            }
-                            aria-label={
-                              isConnecting
-                                ? "Connecting"
-                                : isPreparingWorktree
-                                  ? "Preparing worktree"
-                                  : isSendBusy
-                                    ? "Sending"
-                                    : "Send message"
-                            }
-                          >
-                            {isConnecting || isSendBusy ? (
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 14 14"
-                                fill="none"
-                                className="animate-spin"
-                                aria-hidden="true"
-                              >
-                                <circle
-                                  cx="7"
-                                  cy="7"
-                                  r="5.5"
-                                  stroke="currentColor"
-                                  strokeWidth="1.5"
-                                  strokeLinecap="round"
-                                  strokeDasharray="20 12"
-                                />
-                              </svg>
-                            ) : (
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 14 14"
-                                fill="none"
-                                aria-hidden="true"
-                              >
-                                <path
-                                  d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-                                  stroke="currentColor"
-                                  strokeWidth="1.8"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                />
-                              </svg>
-                            )}
-                          </button>
-                        )}
+                                      />
+                                    }
+                                  >
+                                    <ChevronDownIcon className="size-3.5" />
+                                  </MenuTrigger>
+                                  <MenuPopup align="end" side="top">
+                                    <MenuItem
+                                      disabled={isSendBusy || isConnecting}
+                                      onClick={() => void onImplementPlanInNewThread()}
+                                    >
+                                      Implement in new thread
+                                    </MenuItem>
+                                    <MenuDivider />
+                                    {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
+                                      const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
+                                      return (
+                                        <MenuItem
+                                          key={option.value}
+                                          disabled={isSendBusy || isConnecting}
+                                          onClick={() =>
+                                            void onImplementPlanInNewThread(option.value)
+                                          }
+                                        >
+                                          <OptionIcon className="size-4 shrink-0 opacity-80" />
+                                          Implement with {option.label}
+                                        </MenuItem>
+                                      );
+                                    })}
+                                  </MenuPopup>
+                                </Menu>
+                              </div>
+                            ) : null
+                          ) : (
+                            <button
+                              type="submit"
+                              className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                              disabled={
+                                isSendBusy ||
+                                isConnecting ||
+                                (!prompt.trim() && composerImages.length === 0)
+                              }
+                              aria-label={
+                                isConnecting
+                                  ? "Connecting"
+                                  : isPreparingWorktree
+                                    ? "Preparing worktree"
+                                    : isSendBusy
+                                      ? "Sending"
+                                      : "Send message"
+                              }
+                            >
+                              {isConnecting || isSendBusy ? (
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 14 14"
+                                  fill="none"
+                                  className="animate-spin"
+                                  aria-hidden="true"
+                                >
+                                  <circle
+                                    cx="7"
+                                    cy="7"
+                                    r="5.5"
+                                    stroke="currentColor"
+                                    strokeWidth="1.5"
+                                    strokeLinecap="round"
+                                    strokeDasharray="20 12"
+                                  />
+                                </svg>
+                              ) : (
+                                <svg
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 14 14"
+                                  fill="none"
+                                  aria-hidden="true"
+                                >
+                                  <path
+                                    d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
+                              )}
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
@@ -4726,9 +4798,7 @@ const InlineUserInputCard = memo(function InlineUserInputCard({
         </div>
 
         {/* Question text */}
-        <p className="mt-2 text-sm leading-relaxed text-foreground/90">
-          {activeQuestion.question}
-        </p>
+        <p className="mt-2 text-sm leading-relaxed text-foreground/90">{activeQuestion.question}</p>
 
         {/* Option chips */}
         <div className="mt-3 flex flex-wrap gap-2">
@@ -4791,11 +4861,7 @@ const InlineUserInputCard = memo(function InlineUserInputCard({
               }
               onClick={onAdvance}
             >
-              {isResponding
-                ? "Submitting..."
-                : progress.isLastQuestion
-                  ? "Submit"
-                  : "Next"}
+              {isResponding ? "Submitting..." : progress.isLastQuestion ? "Submit" : "Next"}
             </Button>
           </div>
         )}
@@ -5602,29 +5668,34 @@ const MessagesTimeline = memo(function MessagesTimeline({
                     )}
                   </div>
                 )}
-                {row.message.text && (() => {
-                  const planPrefix = "PLEASE IMPLEMENT THIS PLAN:\n";
-                  if (row.message.text.startsWith(planPrefix)) {
-                    const planMarkdown = row.message.text.slice(planPrefix.length);
-                    const title = proposedPlanTitle(planMarkdown);
-                    const displayedMarkdown = stripDisplayedPlanMarkdown(planMarkdown);
-                    return (
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                          Implement plan{title ? `: ${title}` : ""}
-                        </p>
-                        <div className="rounded-lg border border-border/50 bg-background/50 p-3">
-                          <ChatMarkdown text={displayedMarkdown} cwd={markdownCwd} isStreaming={false} />
+                {row.message.text &&
+                  (() => {
+                    const planPrefix = "PLEASE IMPLEMENT THIS PLAN:\n";
+                    if (row.message.text.startsWith(planPrefix)) {
+                      const planMarkdown = row.message.text.slice(planPrefix.length);
+                      const title = proposedPlanTitle(planMarkdown);
+                      const displayedMarkdown = stripDisplayedPlanMarkdown(planMarkdown);
+                      return (
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Implement plan{title ? `: ${title}` : ""}
+                          </p>
+                          <div className="rounded-lg border border-border/50 bg-background/50 p-3">
+                            <ChatMarkdown
+                              text={displayedMarkdown}
+                              cwd={markdownCwd}
+                              isStreaming={false}
+                            />
+                          </div>
                         </div>
-                      </div>
+                      );
+                    }
+                    return (
+                      <pre className="whitespace-pre-wrap wrap-break-word font-mono text-sm leading-relaxed text-foreground">
+                        {row.message.text}
+                      </pre>
                     );
-                  }
-                  return (
-                    <pre className="whitespace-pre-wrap wrap-break-word font-mono text-sm leading-relaxed text-foreground">
-                      {row.message.text}
-                    </pre>
-                  );
-                })()}
+                  })()}
                 <div className="mt-1.5 flex items-center justify-end gap-2">
                   <div className="flex items-center gap-1.5 opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
                     {row.message.text && <MessageCopyButton text={row.message.text} />}
@@ -5674,7 +5745,9 @@ const MessagesTimeline = memo(function MessagesTimeline({
                 {(() => {
                   const turnSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
                   if (!turnSummary) return null;
-                  const checkpointFiles = turnSummary.files;
+                  const checkpointFiles = turnSummary.files.filter(
+                    (file) => !isPlanFilePath(file.path),
+                  );
                   if (checkpointFiles.length === 0) return null;
                   const summaryStat = summarizeTurnDiffStats(checkpointFiles);
                   const changedFileCountLabel = String(checkpointFiles.length);

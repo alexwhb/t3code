@@ -139,8 +139,15 @@ function runtimeEventBase(
 
 function toCanonicalItemType(raw: unknown): CanonicalItemType {
   const type = asString(raw)?.toLowerCase() ?? "";
-  if (type.includes("commandexecution") || type.includes("bash") || type.includes("command")) return "command_execution";
-  if (type.includes("filechange") || type.includes("edit") || type.includes("write") || type.includes("patch")) return "file_change";
+  if (type.includes("commandexecution") || type.includes("bash") || type.includes("command"))
+    return "command_execution";
+  if (
+    type.includes("filechange") ||
+    type.includes("edit") ||
+    type.includes("write") ||
+    type.includes("patch")
+  )
+    return "file_change";
   if (type.includes("fileread") || type.includes("read")) return "file_change";
   if (type.includes("mcp")) return "mcp_tool_call";
   if (type.includes("toolcall") || type.includes("tool")) return "dynamic_tool_call";
@@ -152,28 +159,48 @@ function toCanonicalItemType(raw: unknown): CanonicalItemType {
 
 function itemTitle(itemType: CanonicalItemType): string | undefined {
   switch (itemType) {
-    case "assistant_message": return "Assistant message";
-    case "command_execution": return "Command run";
-    case "file_change": return "File change";
-    case "mcp_tool_call": return "MCP tool call";
-    case "dynamic_tool_call": return "Tool call";
-    case "reasoning": return "Reasoning";
-    case "web_search": return "Web search";
-    case "error": return "Error";
-    default: return undefined;
+    case "assistant_message":
+      return "Assistant message";
+    case "command_execution":
+      return "Command run";
+    case "file_change":
+      return "File change";
+    case "mcp_tool_call":
+      return "MCP tool call";
+    case "dynamic_tool_call":
+      return "Tool call";
+    case "reasoning":
+      return "Reasoning";
+    case "web_search":
+      return "Web search";
+    case "error":
+      return "Error";
+    default:
+      return undefined;
   }
 }
 
 function contentStreamKindFromMethod(
   method: string,
-): "assistant_text" | "reasoning_text" | "reasoning_summary_text" | "command_output" | "file_change_output" {
+):
+  | "assistant_text"
+  | "reasoning_text"
+  | "reasoning_summary_text"
+  | "command_output"
+  | "file_change_output" {
   switch (method) {
-    case "item/agentMessage/delta": return "assistant_text";
-    case "item/reasoning/textDelta": return "reasoning_text";
-    case "item/reasoning/summaryTextDelta": return "reasoning_summary_text";
-    case "item/commandExecution/outputDelta": return "command_output";
-    case "item/fileChange/outputDelta": return "file_change_output";
-    default: return "assistant_text";
+    case "item/agentMessage/delta":
+      return "assistant_text";
+    case "item/reasoning/textDelta":
+      return "reasoning_text";
+    case "item/reasoning/summaryTextDelta":
+      return "reasoning_summary_text";
+    case "item/commandExecution/outputDelta":
+      return "command_output";
+    case "item/fileChange/outputDelta":
+      return "file_change_output";
+    default:
+      return "assistant_text";
   }
 }
 
@@ -272,10 +299,14 @@ function mapToRuntimeEvents(
         ...runtimeEventBase(event, canonicalThreadId),
         type: "turn.completed",
         payload: {
-          state: status === "failed" ? "failed"
-            : status === "interrupted" ? "interrupted"
-            : status === "cancelled" ? "cancelled"
-            : "completed",
+          state:
+            status === "failed"
+              ? "failed"
+              : status === "interrupted"
+                ? "interrupted"
+                : status === "cancelled"
+                  ? "cancelled"
+                  : "completed",
           ...(errorMessage ? { errorMessage } : {}),
         },
       },
@@ -313,14 +344,8 @@ function mapToRuntimeEvents(
   }
 
   // Text deltas
-  if (
-    event.method === "item/agentMessage/delta" ||
-    event.method === "item/reasoning/textDelta"
-  ) {
-    const delta =
-      event.textDelta ??
-      asString(payload?.delta) ??
-      asString(payload?.text);
+  if (event.method === "item/agentMessage/delta" || event.method === "item/reasoning/textDelta") {
+    const delta = event.textDelta ?? asString(payload?.delta) ?? asString(payload?.text);
     if (!delta || delta.length === 0) return [];
     return [
       {
@@ -372,7 +397,8 @@ function mapToRuntimeEvents(
   if (event.method === "item/tool/completed") {
     const item = asObject(payload?.item) ?? payload;
     const itemType = item ? toCanonicalItemType(asString(item.type) ?? "tool") : "unknown";
-    const toolName = asString(payload?.toolName) ?? asString(payload?.command) ?? asString(item?.name);
+    const toolName =
+      asString(payload?.toolName) ?? asString(payload?.command) ?? asString(item?.name);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -427,6 +453,24 @@ function mapToRuntimeEvents(
         type: "turn.proposed.completed",
         payload: {
           planMarkdown,
+        },
+      },
+    ];
+  }
+
+  // Follow-up suggested (Claude promised to check back in one-shot mode)
+  if (event.method === "turn/followUpSuggested") {
+    const suggestedPrompt = asString(payload?.suggestedPrompt);
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "runtime.warning",
+        payload: {
+          message: "Claude indicated it would follow up, but cannot in one-shot mode.",
+          detail: {
+            kind: "follow-up-suggested",
+            ...(suggestedPrompt ? { suggestedPrompt } : {}),
+          },
         },
       },
     ];
@@ -553,7 +597,9 @@ const makeClaudeCodeAdapter = (options?: ClaudeCodeAdapterLiveOptions) =>
               ...(input.input !== undefined ? { input: input.input } : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),
               ...(images.length > 0 ? { images } : {}),
-              ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+              ...(input.interactionMode !== undefined
+                ? { interactionMode: input.interactionMode }
+                : {}),
             }),
           catch: (cause) => toRequestError(input.threadId, "turn/start", cause),
         });

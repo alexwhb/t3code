@@ -435,11 +435,17 @@ export function deriveWorkLogEntries(
       if (command) {
         entry.command = command;
       }
-      if (changedFiles.length > 0) {
-        entry.changedFiles = changedFiles;
+      const filteredChangedFiles = changedFiles.filter((f) => !isPlanFilePath(f));
+      if (filteredChangedFiles.length > 0) {
+        entry.changedFiles = filteredChangedFiles;
       }
       return entry;
     });
+}
+
+export function isPlanFilePath(filePath: string): boolean {
+  if (filePath === ".plan") return true;
+  return /(?:^|[/\\])\.claude[/\\]plans[/\\]/.test(filePath) && /\.md$/i.test(filePath);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -617,4 +623,48 @@ export function derivePhase(session: ThreadSession | null): SessionPhase {
   if (session.status === "connecting") return "connecting";
   if (session.status === "running") return "running";
   return "ready";
+}
+
+export interface FollowUpSuggestion {
+  readonly suggestedPrompt: string;
+  readonly activityId: string;
+}
+
+/**
+ * Finds the most recent follow-up suggestion from a `runtime.warning` activity
+ * with `detail.kind === "follow-up-suggested"`. Returns null if none exists or
+ * if a newer turn has started since the suggestion was emitted.
+ */
+export function deriveFollowUpSuggestion(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  _latestTurnId?: TurnId | undefined,
+): FollowUpSuggestion | null {
+  // Walk backwards to find the most recent follow-up suggestion.
+  for (let i = activities.length - 1; i >= 0; i--) {
+    const activity = activities[i]!;
+
+    // If we hit a turn-started activity for a newer turn, the suggestion is stale.
+    if (activity.kind === "turn.started" && activity.turnId !== null) {
+      // The suggestion was from a previous turn — dismiss it.
+      break;
+    }
+
+    if (activity.kind !== "runtime.warning") continue;
+
+    const detail =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>).detail
+        : undefined;
+    if (!detail || typeof detail !== "object") continue;
+    const detailObj = detail as Record<string, unknown>;
+    if (detailObj.kind !== "follow-up-suggested") continue;
+
+    const suggestedPrompt =
+      typeof detailObj.suggestedPrompt === "string" ? detailObj.suggestedPrompt : null;
+    if (!suggestedPrompt) continue;
+
+    return { suggestedPrompt, activityId: activity.id };
+  }
+
+  return null;
 }
