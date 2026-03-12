@@ -7,7 +7,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import {
   type DiffRouteSearch,
   parseDiffRouteSearch,
-  stripDiffSearchParams,
+  setDiffOpenInSearch,
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useStore } from "../store";
@@ -171,7 +171,7 @@ function ChatThreadRouteView() {
       to: "/$threadId",
       params: { threadId },
       search: (previous) => {
-        return stripDiffSearchParams(previous);
+        return setDiffOpenInSearch(previous, false) as unknown as DiffRouteSearch;
       },
     });
   }, [navigate, threadId]);
@@ -180,8 +180,7 @@ function ChatThreadRouteView() {
       to: "/$threadId",
       params: { threadId },
       search: (previous) => {
-        const rest = stripDiffSearchParams(previous);
-        return { ...rest, diff: "1" };
+        return setDiffOpenInSearch(previous, true);
       },
     });
   }, [navigate, threadId]);

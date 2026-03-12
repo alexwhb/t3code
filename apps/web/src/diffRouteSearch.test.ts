@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDiffRouteSearch } from "./diffRouteSearch";
+import { parseDiffRouteSearch, setDiffOpenInSearch } from "./diffRouteSearch";
 
 describe("parseDiffRouteSearch", () => {
   it("parses valid diff search values", () => {
@@ -69,6 +69,23 @@ describe("parseDiffRouteSearch", () => {
 
     expect(parsed).toEqual({
       diff: "1",
+    });
+  });
+
+  it("explicitly clears diff when closing so retained search params do not re-open it", () => {
+    expect(
+      setDiffOpenInSearch(
+        {
+          diff: "1",
+          diffTurnId: "turn-1",
+          diffFilePath: "src/app.ts",
+          view: "timeline",
+        },
+        false,
+      ),
+    ).toEqual({
+      diff: undefined,
+      view: "timeline",
     });
   });
 });

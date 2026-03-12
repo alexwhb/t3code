@@ -25,6 +25,30 @@ export function stripDiffSearchParams<T extends Record<string, unknown>>(
   return rest as Omit<T, "diff" | "diffTurnId" | "diffFilePath">;
 }
 
+export function setDiffOpenInSearch<T extends Record<string, unknown>>(
+  params: T,
+  open: true,
+): Omit<T, "diff" | "diffTurnId" | "diffFilePath"> & { diff: "1" };
+export function setDiffOpenInSearch<T extends Record<string, unknown>>(
+  params: T,
+  open: false,
+): Omit<T, "diff" | "diffTurnId" | "diffFilePath"> & { diff: undefined };
+export function setDiffOpenInSearch<T extends Record<string, unknown>>(
+  params: T,
+  open: boolean,
+):
+  | (Omit<T, "diff" | "diffTurnId" | "diffFilePath"> & { diff: "1" })
+  | (Omit<T, "diff" | "diffTurnId" | "diffFilePath"> & { diff: undefined }) {
+  const rest = stripDiffSearchParams(params);
+  if (open) {
+    return { ...rest, diff: "1" };
+  }
+
+  // Keep the key present so TanStack Router's retainSearchParams middleware
+  // does not re-inject the previous open state on close.
+  return { ...rest, diff: undefined };
+}
+
 export function parseDiffRouteSearch(search: Record<string, unknown>): DiffRouteSearch {
   const diff = isDiffOpenValue(search.diff) ? "1" : undefined;
   const diffTurnIdRaw = diff ? normalizeSearchString(search.diffTurnId) : undefined;
