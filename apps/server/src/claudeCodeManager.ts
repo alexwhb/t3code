@@ -1173,10 +1173,22 @@ export function buildClaudeArgs(input: {
 
   // Claude Code runs in one-shot (--print) mode. Instruct it not to
   // promise follow-ups it cannot deliver.
-  args.push(
-    "--append-system-prompt",
+  const systemPromptParts = [
     "You run in one-shot mode. Each response is a separate invocation — you cannot send follow-up messages after your response ends. Never promise to 'let you know', 'check back', or 'follow up later'. Instead, give the user a command they can run to check status, or summarize what to look for.",
-  );
+  ];
+
+  // In plan mode, require Claude to always surface the plan through
+  // ExitPlanMode so the harness can capture it for the sidebar.  Without
+  // this, Claude sometimes responds with prose describing plan changes
+  // but never calls ExitPlanMode or writes the plan file, leaving the
+  // displayed plan stale.
+  if (input.interactionMode === "plan") {
+    systemPromptParts.push(
+      "You are in plan mode. You MUST always finish your response by calling the ExitPlanMode tool with the full, updated plan markdown. Even when the user provides feedback on an existing plan, incorporate the feedback and call ExitPlanMode with the complete revised plan. Never describe plan changes in prose only — the plan must be captured via ExitPlanMode every time.",
+    );
+  }
+
+  args.push("--append-system-prompt", systemPromptParts.join("\n\n"));
 
   // When images are present, use stream-json input so we can send
   // structured content blocks (text + images) via stdin.
