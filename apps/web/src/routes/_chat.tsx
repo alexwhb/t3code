@@ -1,10 +1,10 @@
-import { Outlet, createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { type ResolvedKeybindingsConfig, ThreadId } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
+import { Outlet, createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ThreadId } from "@t3tools/contracts";
 
-import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import ThreadSidebar from "../components/Sidebar";
+import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import ScratchNotesSheet from "../components/ScratchNotesSheet";
 import {
   Sidebar,
@@ -15,13 +15,93 @@ import {
 import { useStore } from "../store";
 import { useScratchNotes } from "../scratchNotes";
 import { ScratchNotesProvider } from "../scratchNotesContext";
-import { resolveShortcutCommand } from "../keybindings";
+import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { resolveShortcutCommand } from "../keybindings";
+import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { useThreadSelectionStore } from "../threadSelectionStore";
+import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
+import { useAppSettings } from "~/appSettings";
 
-const EMPTY_KEYBINDINGS: never[] = [];
+const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const LEFT_SIDEBAR_MIN = SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH; // 256px
 const LEFT_SIDEBAR_MAX = SIDEBAR_RESIZE_DEFAULT_MIN_WIDTH * 3; // 768px
 const MIN_MAIN_CONTENT_WIDTH = 480;
+
+function ChatRouteGlobalShortcuts() {
+  const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
+  const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
+  const { activeDraftThread, activeThread, handleNewThread, projects, routeThreadId } =
+    useHandleNewThread();
+  const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
+  const terminalOpen = useTerminalStateStore((state) =>
+    routeThreadId
+      ? selectThreadTerminalState(state.terminalStateByThreadId, routeThreadId).terminalOpen
+      : false,
+  );
+  const { settings: appSettings } = useAppSettings();
+
+  useEffect(() => {
+    const onWindowKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+
+      if (event.key === "Escape" && selectedThreadIdsSize > 0) {
+        event.preventDefault();
+        clearSelection();
+        return;
+      }
+
+      const projectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
+      if (!projectId) return;
+
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: {
+          terminalFocus: isTerminalFocused(),
+          terminalOpen,
+        },
+      });
+
+      if (command === "chat.newLocal") {
+        event.preventDefault();
+        event.stopPropagation();
+        void handleNewThread(projectId, {
+          envMode: resolveSidebarNewThreadEnvMode({
+            defaultEnvMode: appSettings.defaultThreadEnvMode,
+          }),
+        });
+        return;
+      }
+
+      if (command !== "chat.new") return;
+      event.preventDefault();
+      event.stopPropagation();
+      void handleNewThread(projectId, {
+        branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
+        worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
+        envMode: activeDraftThread?.envMode ?? (activeThread?.worktreePath ? "worktree" : "local"),
+      });
+    };
+
+    window.addEventListener("keydown", onWindowKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onWindowKeyDown);
+    };
+  }, [
+    activeDraftThread,
+    activeThread,
+    clearSelection,
+    handleNewThread,
+    keybindings,
+    projects,
+    selectedThreadIdsSize,
+    terminalOpen,
+    appSettings.defaultThreadEnvMode,
+  ]);
+
+  return null;
+}
 
 function ChatRouteLayout() {
   const navigate = useNavigate();
@@ -100,6 +180,7 @@ function ChatRouteLayout() {
   return (
     <ScratchNotesProvider openSheet={openSheet} pinMessage={pinMessage}>
       <SidebarProvider defaultOpen>
+        <ChatRouteGlobalShortcuts />
         <Sidebar
           side="left"
           collapsible="offcanvas"

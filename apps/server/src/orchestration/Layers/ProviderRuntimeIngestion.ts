@@ -5,6 +5,7 @@ import {
   MessageId,
   type OrchestrationEvent,
   CheckpointRef,
+  isToolLifecycleItemType,
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
@@ -272,6 +273,7 @@ function isToolLifecycleItemType(itemType: string): boolean {
     itemType === "image_view"
   );
 }
+
 
 function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
