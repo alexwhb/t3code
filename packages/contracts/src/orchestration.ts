@@ -78,6 +78,8 @@ export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
+export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 1 * 1024 * 1024;
+const PROVIDER_SEND_TURN_MAX_FILE_DATA_URL_CHARS = 1_400_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 // Correlation id is command id by design in this model.
 export const CorrelationId = CommandId;
@@ -109,9 +111,82 @@ const UploadChatImageAttachment = Schema.Struct({
 });
 export type UploadChatImageAttachment = typeof UploadChatImageAttachment.Type;
 
-export const ChatAttachment = Schema.Union([ChatImageAttachment]);
+const TEXT_FILE_APPLICATION_MIME_TYPES = new Set([
+  "application/json",
+  "application/xml",
+  "application/yaml",
+  "application/x-yaml",
+  "application/javascript",
+  "application/typescript",
+  "application/toml",
+]);
+
+export function isTextFileMimeType(mime: string): boolean {
+  const lower = mime.toLowerCase();
+  return lower.startsWith("text/") || TEXT_FILE_APPLICATION_MIME_TYPES.has(lower);
+}
+
+const MIME_BY_FILE_EXTENSION: Record<string, string> = {
+  ".csv": "text/csv",
+  ".json": "application/json",
+  ".log": "text/plain",
+  ".md": "text/markdown",
+  ".toml": "application/toml",
+  ".tsv": "text/tab-separated-values",
+  ".txt": "text/plain",
+  ".xml": "application/xml",
+  ".yaml": "application/yaml",
+  ".yml": "application/yaml",
+  ".css": "text/css",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".js": "application/javascript",
+  ".jsx": "application/javascript",
+  ".ts": "application/typescript",
+  ".tsx": "application/typescript",
+  ".py": "text/x-python",
+  ".rb": "text/x-ruby",
+  ".sh": "text/x-shellscript",
+  ".sql": "text/x-sql",
+  ".rs": "text/x-rust",
+  ".go": "text/x-go",
+  ".java": "text/x-java",
+  ".c": "text/x-c",
+  ".cpp": "text/x-c++",
+  ".h": "text/x-c",
+  ".swift": "text/x-swift",
+};
+
+export function inferMimeTypeFromFileName(name: string): string | null {
+  const match = /\.([a-z0-9]+)$/i.exec(name.trim());
+  if (!match) return null;
+  const ext = `.${match[1]!.toLowerCase()}`;
+  return MIME_BY_FILE_EXTENSION[ext] ?? null;
+}
+
+export const ChatFileAttachment = Schema.Struct({
+  type: Schema.Literal("file"),
+  id: ChatAttachmentId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
+});
+export type ChatFileAttachment = typeof ChatFileAttachment.Type;
+
+const UploadChatFileAttachment = Schema.Struct({
+  type: Schema.Literal("file"),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
+  dataUrl: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_FILE_DATA_URL_CHARS),
+  ),
+});
+export type UploadChatFileAttachment = typeof UploadChatFileAttachment.Type;
+
+export const ChatAttachment = Schema.Union([ChatImageAttachment, ChatFileAttachment]);
 export type ChatAttachment = typeof ChatAttachment.Type;
-const UploadChatAttachment = Schema.Union([UploadChatImageAttachment]);
+const UploadChatAttachment = Schema.Union([UploadChatImageAttachment, UploadChatFileAttachment]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 
 export const ProjectScriptIcon = Schema.Literals([

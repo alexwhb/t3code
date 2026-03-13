@@ -18,6 +18,8 @@ import {
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  isTextFileMimeType,
   ProjectId,
   ThreadId,
   WS_CHANNELS,
@@ -345,75 +347,146 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       (attachment) =>
         Effect.gen(function* () {
           const parsed = parseBase64DataUrl(attachment.dataUrl);
-          if (!parsed || !parsed.mimeType.startsWith("image/")) {
+          if (!parsed) {
             return yield* new RouteRequestError({
-              message: `Invalid image attachment payload for '${attachment.name}'.`,
+              message: `Invalid attachment payload for '${attachment.name}'.`,
             });
           }
 
           const rawBytes = Buffer.from(parsed.base64, "base64");
-          if (
-            rawBytes.byteLength === 0 ||
-            rawBytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
-          ) {
+          if (rawBytes.byteLength === 0) {
             return yield* new RouteRequestError({
-              message: `Image attachment '${attachment.name}' is empty or too large.`,
+              message: `Attachment '${attachment.name}' is empty.`,
             });
           }
 
-          // Compress if the base64 encoding would exceed Claude's API limit (5 MB).
-          const compressed = yield* Effect.tryPromise({
-            try: () => compressImageIfNeeded(rawBytes, parsed.mimeType),
-            catch: () =>
-              new RouteRequestError({
-                message: `Failed to compress attachment '${attachment.name}'.`,
-              }),
-          });
-          const bytes = Buffer.from(compressed.bytes);
+          if (parsed.mimeType.startsWith("image/")) {
+            // ── Image attachment pipeline ──
+            if (rawBytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+              return yield* new RouteRequestError({
+                message: `Image attachment '${attachment.name}' is too large.`,
+              });
+            }
 
-          const attachmentId = createAttachmentId(turnStartCommand.threadId);
-          if (!attachmentId) {
-            return yield* new RouteRequestError({
-              message: "Failed to create a safe attachment id.",
-            });
-          }
-
-          const persistedAttachment = {
-            type: "image" as const,
-            id: attachmentId,
-            name: attachment.name,
-            mimeType: compressed.mediaType.toLowerCase(),
-            sizeBytes: bytes.byteLength,
-          };
-
-          const attachmentPath = resolveAttachmentPath({
-            stateDir: serverConfig.stateDir,
-            attachment: persistedAttachment,
-          });
-          if (!attachmentPath) {
-            return yield* new RouteRequestError({
-              message: `Failed to resolve persisted path for '${attachment.name}'.`,
-            });
-          }
-
-          yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
-            Effect.mapError(
-              () =>
+            // Compress if the base64 encoding would exceed Claude's API limit (5 MB).
+            const compressed = yield* Effect.tryPromise({
+              try: () => compressImageIfNeeded(rawBytes, parsed.mimeType),
+              catch: () =>
                 new RouteRequestError({
-                  message: `Failed to create attachment directory for '${attachment.name}'.`,
+                  message: `Failed to compress attachment '${attachment.name}'.`,
                 }),
-            ),
-          );
-          yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
-            Effect.mapError(
-              () =>
-                new RouteRequestError({
-                  message: `Failed to persist attachment '${attachment.name}'.`,
-                }),
-            ),
-          );
+            });
+            const bytes = Buffer.from(compressed.bytes);
 
-          return persistedAttachment;
+            const attachmentId = createAttachmentId(turnStartCommand.threadId);
+            if (!attachmentId) {
+              return yield* new RouteRequestError({
+                message: "Failed to create a safe attachment id.",
+              });
+            }
+
+            const persistedAttachment = {
+              type: "image" as const,
+              id: attachmentId,
+              name: attachment.name,
+              mimeType: compressed.mediaType.toLowerCase(),
+              sizeBytes: bytes.byteLength,
+            };
+
+            const attachmentPath = resolveAttachmentPath({
+              stateDir: serverConfig.stateDir,
+              attachment: persistedAttachment,
+            });
+            if (!attachmentPath) {
+              return yield* new RouteRequestError({
+                message: `Failed to resolve persisted path for '${attachment.name}'.`,
+              });
+            }
+
+            yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
+              Effect.mapError(
+                () =>
+                  new RouteRequestError({
+                    message: `Failed to create attachment directory for '${attachment.name}'.`,
+                  }),
+              ),
+            );
+            yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
+              Effect.mapError(
+                () =>
+                  new RouteRequestError({
+                    message: `Failed to persist attachment '${attachment.name}'.`,
+                  }),
+              ),
+            );
+
+            return persistedAttachment;
+          }
+
+          if (isTextFileMimeType(parsed.mimeType)) {
+            // ── File (text) attachment pipeline ──
+            if (rawBytes.byteLength > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+              return yield* new RouteRequestError({
+                message: `File attachment '${attachment.name}' exceeds the 1MB file size limit.`,
+              });
+            }
+
+            // Validate UTF-8 decodability — reject binary files.
+            const textContent = rawBytes.toString("utf-8");
+            if (textContent.includes("\0")) {
+              return yield* new RouteRequestError({
+                message: `File attachment '${attachment.name}' appears to be binary. Only text files are supported.`,
+              });
+            }
+
+            const attachmentId = createAttachmentId(turnStartCommand.threadId);
+            if (!attachmentId) {
+              return yield* new RouteRequestError({
+                message: "Failed to create a safe attachment id.",
+              });
+            }
+
+            const persistedAttachment = {
+              type: "file" as const,
+              id: attachmentId,
+              name: attachment.name,
+              mimeType: parsed.mimeType.toLowerCase(),
+              sizeBytes: rawBytes.byteLength,
+            };
+
+            const attachmentPath = resolveAttachmentPath({
+              stateDir: serverConfig.stateDir,
+              attachment: persistedAttachment,
+            });
+            if (!attachmentPath) {
+              return yield* new RouteRequestError({
+                message: `Failed to resolve persisted path for '${attachment.name}'.`,
+              });
+            }
+
+            yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
+              Effect.mapError(
+                () =>
+                  new RouteRequestError({
+                    message: `Failed to create attachment directory for '${attachment.name}'.`,
+                  }),
+              ),
+            );
+            yield* fileSystem.writeFile(attachmentPath, rawBytes).pipe(
+              Effect.mapError(
+                () =>
+                  new RouteRequestError({
+                    message: `Failed to persist attachment '${attachment.name}'.`,
+                  }),
+              ),
+            );
+
+            return persistedAttachment;
+          }
+
+          return yield* new RouteRequestError({
+            message: `Unsupported file type for '${attachment.name}'. Text and image files are supported.`,
+          });
         }),
       { concurrency: 1 },
     );

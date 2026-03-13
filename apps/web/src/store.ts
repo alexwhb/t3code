@@ -297,14 +297,22 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
             }
           : null,
         messages: thread.messages.map((message) => {
-          const attachments = message.attachments?.map((attachment) => ({
-            type: "image" as const,
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          }));
+          const attachments = message.attachments?.map((attachment) => {
+            const base = {
+              type: attachment.type,
+              id: attachment.id,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            };
+            if (attachment.type === "image") {
+              return {
+                ...base,
+                previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+              };
+            }
+            return base;
+          });
           const normalizedMessage: ChatMessage = {
             id: message.id,
             role: message.role,

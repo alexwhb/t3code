@@ -12,6 +12,7 @@ import {
   Menu,
   nativeImage,
   nativeTheme,
+  net,
   protocol,
   shell,
 } from "electron";
@@ -461,7 +462,7 @@ function registerDesktopProtocol(): void {
   const staticRootPrefix = `${staticRootResolved}${Path.sep}`;
   const fallbackIndex = Path.join(staticRootResolved, "index.html");
 
-  protocol.registerFileProtocol(DESKTOP_SCHEME, (request, callback) => {
+  protocol.handle(DESKTOP_SCHEME, (request) => {
     try {
       const candidate = resolveDesktopStaticPath(staticRootResolved, request.url);
       const resolvedCandidate = Path.resolve(candidate);
@@ -471,16 +472,14 @@ function registerDesktopProtocol(): void {
 
       if (!isInRoot || !FS.existsSync(resolvedCandidate)) {
         if (isAssetRequest) {
-          callback({ error: -6 });
-          return;
+          return new Response("Not found", { status: 404 });
         }
-        callback({ path: fallbackIndex });
-        return;
+        return net.fetch(`file://${fallbackIndex}`);
       }
 
-      callback({ path: resolvedCandidate });
+      return net.fetch(`file://${resolvedCandidate}`);
     } catch {
-      callback({ path: fallbackIndex });
+      return net.fetch(`file://${fallbackIndex}`);
     }
   });
 
@@ -698,8 +697,12 @@ function clearUpdatePollTimer(): void {
 
 function emitUpdateState(): void {
   for (const window of BrowserWindow.getAllWindows()) {
-    if (window.isDestroyed()) continue;
-    window.webContents.send(UPDATE_STATE_CHANNEL, updateState);
+    if (window.isDestroyed() || window.webContents.isDestroyed()) continue;
+    try {
+      window.webContents.send(UPDATE_STATE_CHANNEL, updateState);
+    } catch {
+      // Window may have been destroyed between the check and the send.
+    }
   }
 }
 
@@ -1099,6 +1102,10 @@ function registerIpcHandlers(): void {
         return null;
       }
 
+      const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
+      if (!window) return null;
+
+      const zoomFactor = window.webContents.getZoomFactor();
       const popupPosition =
         position &&
         Number.isFinite(position.x) &&
@@ -1106,13 +1113,10 @@ function registerIpcHandlers(): void {
         position.x >= 0 &&
         position.y >= 0
           ? {
-              x: Math.floor(position.x),
-              y: Math.floor(position.y),
+              x: Math.floor(position.x * zoomFactor),
+              y: Math.floor(position.y * zoomFactor),
             }
           : null;
-
-      const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
-      if (!window) return null;
 
       return new Promise<string | null>((resolve) => {
         const template: MenuItemConstructorOptions[] = [];
@@ -1309,6 +1313,16 @@ async function bootstrap(): Promise<void> {
   mainWindow = createWindow();
   writeDesktopLogHeader("bootstrap main window created");
 }
+
+process.on("uncaughtException", (error) => {
+  console.error("[desktop] uncaught exception", error);
+  writeDesktopLogHeader(`uncaughtException: ${formatErrorMessage(error)}`);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[desktop] unhandled rejection", reason);
+  writeDesktopLogHeader(`unhandledRejection: ${formatErrorMessage(reason)}`);
+});
 
 app.on("before-quit", () => {
   isQuitting = true;

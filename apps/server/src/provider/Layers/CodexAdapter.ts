@@ -1323,6 +1323,16 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
+        // Codex only supports image attachments — reject file attachments.
+        const fileAttachment = (input.attachments ?? []).find((a) => a.type === "file");
+        if (fileAttachment) {
+          return yield* toRequestError(
+            input.threadId,
+            "turn/start",
+            new Error("File attachments are only supported in Claude mode."),
+          );
+        }
+
         const codexAttachments = yield* Effect.forEach(
           input.attachments ?? [],
           (attachment) =>

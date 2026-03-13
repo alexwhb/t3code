@@ -28,6 +28,7 @@ import {
 import { ClaudeCodeAdapter, type ClaudeCodeAdapterShape } from "../Services/ClaudeCodeAdapter.ts";
 import {
   ClaudeCodeManager,
+  type ClaudeCodeFileAttachment,
   type ClaudeCodeImageAttachment,
   type ClaudeCodeStartSessionInput,
 } from "../../claudeCodeManager.ts";
@@ -562,7 +563,10 @@ const makeClaudeCodeAdapter = (options?: ClaudeCodeAdapterLiveOptions) =>
 
     const sendTurn: ClaudeCodeAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
-        const images: ClaudeCodeImageAttachment[] = yield* Effect.forEach(
+        const images: ClaudeCodeImageAttachment[] = [];
+        const files: ClaudeCodeFileAttachment[] = [];
+
+        yield* Effect.forEach(
           input.attachments ?? [],
           (attachment) =>
             Effect.gen(function* () {
@@ -582,10 +586,17 @@ const makeClaudeCodeAdapter = (options?: ClaudeCodeAdapterLiveOptions) =>
                 .pipe(
                   Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)),
                 );
-              return {
-                mediaType: attachment.mimeType,
-                base64Data: Buffer.from(bytes).toString("base64"),
-              };
+              if (attachment.type === "image") {
+                images.push({
+                  mediaType: attachment.mimeType,
+                  base64Data: Buffer.from(bytes).toString("base64"),
+                });
+              } else {
+                files.push({
+                  fileName: attachment.name,
+                  textContent: Buffer.from(bytes).toString("utf-8"),
+                });
+              }
             }),
           { concurrency: 1 },
         );
@@ -597,6 +608,7 @@ const makeClaudeCodeAdapter = (options?: ClaudeCodeAdapterLiveOptions) =>
               ...(input.input !== undefined ? { input: input.input } : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),
               ...(images.length > 0 ? { images } : {}),
+              ...(files.length > 0 ? { files } : {}),
               ...(input.interactionMode !== undefined
                 ? { interactionMode: input.interactionMode }
                 : {}),

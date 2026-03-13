@@ -19,17 +19,26 @@ function messageRoleLabel(message: ChatMessage): "USER" | "ASSISTANT" {
 }
 
 function attachmentSummary(message: ChatMessage): string | null {
-  const imageAttachments = message.attachments?.filter((attachment) => attachment.type === "image");
-  const count = imageAttachments?.length ?? 0;
-  if (count === 0) {
-    return null;
+  const imageAttachments =
+    message.attachments?.filter((attachment) => attachment.type === "image") ?? [];
+  const fileAttachments =
+    message.attachments?.filter((attachment) => attachment.type === "file") ?? [];
+  const parts: string[] = [];
+  if (imageAttachments.length > 0) {
+    const names = imageAttachments.slice(0, 3).map((a) => a.name);
+    const extra = imageAttachments.length - names.length;
+    parts.push(
+      `[Attached image${imageAttachments.length === 1 ? "" : "s"}: ${names.join(", ")}${extra > 0 ? ` (+${extra} more)` : ""}]`,
+    );
   }
-
-  const names = imageAttachments?.slice(0, 3).map((image) => image.name) ?? [];
-  const namesSummary = names.join(", ");
-  const extraCount = count - names.length;
-  const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
-  return `[Attached image${count === 1 ? "" : "s"}: ${namesSummary}${extraSummary}]`;
+  if (fileAttachments.length > 0) {
+    const names = fileAttachments.slice(0, 3).map((a) => a.name);
+    const extra = fileAttachments.length - names.length;
+    parts.push(
+      `[Attached file${fileAttachments.length === 1 ? "" : "s"}: ${names.join(", ")}${extra > 0 ? ` (+${extra} more)` : ""}]`,
+    );
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
 }
 
 function buildMessageBlock(message: ChatMessage): string {

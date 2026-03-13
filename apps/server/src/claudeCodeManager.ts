@@ -100,11 +100,17 @@ export interface ClaudeCodeImageAttachment {
   readonly base64Data: string;
 }
 
+export interface ClaudeCodeFileAttachment {
+  readonly fileName: string;
+  readonly textContent: string;
+}
+
 export interface ClaudeCodeSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
   readonly model?: string;
   readonly images?: readonly ClaudeCodeImageAttachment[];
+  readonly files?: readonly ClaudeCodeFileAttachment[];
   readonly interactionMode?: ProviderInteractionMode;
 }
 
@@ -202,8 +208,9 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
   async sendTurn(input: ClaudeCodeSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
 
-    if (!input.input?.trim()) {
-      throw new Error("Turn input must include text.");
+    const hasFiles = (input.files?.length ?? 0) > 0;
+    if (!input.input?.trim() && !hasFiles) {
+      throw new Error("Turn input must include text or file attachments.");
     }
 
     const turnId = TurnId.makeUnsafe(randomUUID());
@@ -222,14 +229,15 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
       CLAUDE_DEFAULT_MODEL;
 
     const hasImages = (input.images?.length ?? 0) > 0;
+    const hasAttachments = hasImages || hasFiles;
 
     const args = buildClaudeArgs({
       model,
       runtimeMode: context.session.runtimeMode,
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
       resumeCursor: context.conversationId ? { conversationId: context.conversationId } : undefined,
-      ...(hasImages ? {} : input.input !== undefined ? { prompt: input.input } : {}),
-      ...(hasImages ? { hasImages: true } : {}),
+      ...(hasAttachments ? {} : input.input !== undefined ? { prompt: input.input } : {}),
+      ...(hasAttachments ? { hasImages: true } : {}),
     });
 
     // Kill any previous child that hasn't exited yet
@@ -247,14 +255,19 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    if (hasImages) {
-      // When images are present, send a structured user message via stdin
+    if (hasAttachments) {
+      // When attachments are present, send a structured user message via stdin
       // using the stream-json input format (Anthropic content block array).
       const contentBlocks: unknown[] = [];
       if (input.input) {
         contentBlocks.push({ type: "text", text: input.input });
+      } else if (hasFiles && !hasImages) {
+        contentBlocks.push({
+          type: "text",
+          text: "[User attached file(s) without additional text. Analyze the attached file(s) using the conversation context.]",
+        });
       }
-      for (const img of input.images!) {
+      for (const img of input.images ?? []) {
         contentBlocks.push({
           type: "image",
           source: {
@@ -262,6 +275,12 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
             media_type: img.mediaType,
             data: img.base64Data,
           },
+        });
+      }
+      for (const file of input.files ?? []) {
+        contentBlocks.push({
+          type: "text",
+          text: `<attached_file name="${file.fileName}">\n${file.textContent}\n</attached_file>`,
         });
       }
       const userMessage = JSON.stringify({
