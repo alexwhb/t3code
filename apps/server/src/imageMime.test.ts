@@ -21,8 +21,11 @@ describe("imageMime", () => {
     expect(parseBase64DataUrl("data:image/png;charset=utf-8,hello")).toBeNull();
   });
 
-  it("rejects missing mime type", () => {
-    expect(parseBase64DataUrl("data:;base64,SGVsbG8=")).toBeNull();
+  it("accepts empty mime type (browser may omit it for non-image files)", () => {
+    expect(parseBase64DataUrl("data:;base64,SGVsbG8=")).toEqual({
+      base64: "SGVsbG8=",
+      mimeType: "",
+    });
   });
 
   it("parses base64 data URL with spaces in payload", () => {

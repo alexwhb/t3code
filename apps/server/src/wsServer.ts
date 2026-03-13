@@ -360,7 +360,13 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             });
           }
 
-          if (parsed.mimeType.startsWith("image/")) {
+          // Use the structured attachment type (validated by schema) instead of
+          // sniffing the MIME from the data URL.  The browser may leave file.type
+          // empty for non-image files, producing a data URL whose MIME is "" while
+          // attachment.mimeType was correctly resolved on the frontend.
+          const attachmentMime = attachment.mimeType.toLowerCase();
+
+          if (attachment.type === "image") {
             // ── Image attachment pipeline ──
             if (rawBytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
               return yield* new RouteRequestError({
@@ -370,7 +376,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
             // Compress if the base64 encoding would exceed Claude's API limit (5 MB).
             const compressed = yield* Effect.tryPromise({
-              try: () => compressImageIfNeeded(rawBytes, parsed.mimeType),
+              try: () => compressImageIfNeeded(rawBytes, attachmentMime),
               catch: () =>
                 new RouteRequestError({
                   message: `Failed to compress attachment '${attachment.name}'.`,
@@ -389,7 +395,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
               type: "image" as const,
               id: attachmentId,
               name: attachment.name,
-              mimeType: compressed.mediaType.toLowerCase(),
+              mimeType: compressed.mediaType.toLowerCase() || attachmentMime,
               sizeBytes: bytes.byteLength,
             };
 
@@ -423,7 +429,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             return persistedAttachment;
           }
 
-          if (isTextFileMimeType(parsed.mimeType)) {
+          if (attachment.type === "file" && isTextFileMimeType(attachmentMime)) {
             // ── File (text) attachment pipeline ──
             if (rawBytes.byteLength > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
               return yield* new RouteRequestError({
@@ -450,7 +456,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
               type: "file" as const,
               id: attachmentId,
               name: attachment.name,
-              mimeType: parsed.mimeType.toLowerCase(),
+              mimeType: attachmentMime,
               sizeBytes: rawBytes.byteLength,
             };
 

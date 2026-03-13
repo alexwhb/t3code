@@ -292,6 +292,11 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "turn/completed") {
+    console.log("[DEBUG:ClaudeCodeAdapter] turn/completed received", {
+      threadId: canonicalThreadId,
+      turnId: event.turnId,
+      method: event.method,
+    });
     const turn = asObject(payload?.turn);
     const status = asString(turn?.status);
     const errorMessage = asString(asObject(turn?.error)?.message);
@@ -714,8 +719,23 @@ const makeClaudeCodeAdapter = (options?: ClaudeCodeAdapterLiveOptions) =>
               });
               return;
             }
+            if (runtimeEvents.some((e) => e.type === "turn.completed")) {
+              console.log("[DEBUG:ClaudeCodeAdapter] queuing turn.completed runtime event", {
+                threadId: event.threadId,
+                turnId: event.turnId,
+              });
+            }
             yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
-          }).pipe(Effect.runPromiseWith(services));
+          })
+            .pipe(Effect.runPromiseWith(services))
+            .catch((err) => {
+              console.error("[DEBUG:ClaudeCodeAdapter] listener Effect rejected", {
+                method: event.method,
+                threadId: event.threadId,
+                turnId: event.turnId,
+                error: err,
+              });
+            });
         manager.on("event", listener);
         return listener;
       }),

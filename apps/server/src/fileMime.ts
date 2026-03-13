@@ -29,7 +29,8 @@ export function inferFileExtension(input: { mimeType: string; fileName?: string 
     return fromMime;
   }
 
-  const fromMimeExtension = Mime.getExtension(input.mimeType);
+  const rawExtension = Mime.getExtension(input.mimeType);
+  const fromMimeExtension = rawExtension ? `.${rawExtension}` : undefined;
   if (fromMimeExtension && SAFE_TEXT_FILE_EXTENSIONS.has(fromMimeExtension)) {
     return fromMimeExtension;
   }

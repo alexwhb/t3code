@@ -976,6 +976,16 @@ const make = Effect.gen(function* () {
                 ? null
                 : (thread.session?.lastError ?? null);
 
+        if (event.type === "turn.completed") {
+          console.log("[DEBUG:ProviderRuntimeIngestion] turn.completed lifecycle check", {
+            threadId: thread.id,
+            eventTurnId: toTurnId(event.turnId),
+            activeTurnId,
+            shouldApplyThreadLifecycle,
+            nextStatus: status,
+            nextActiveTurnId,
+          });
+        }
         if (shouldApplyThreadLifecycle) {
           yield* orchestrationEngine.dispatch({
             type: "thread.session.set",
@@ -992,6 +1002,12 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+          if (event.type === "turn.completed") {
+            console.log("[DEBUG:ProviderRuntimeIngestion] dispatched thread.session.set (ready)", {
+              threadId: thread.id,
+              status,
+            });
+          }
         }
       }
 
@@ -1235,6 +1251,12 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
+        console.error("[DEBUG:ProviderRuntimeIngestion] event processing FAILED", {
+          source: input.source,
+          eventId: input.event.eventId,
+          eventType: input.event.type,
+          cause: Cause.pretty(cause),
+        });
         return Effect.logWarning("provider runtime ingestion failed to process event", {
           source: input.source,
           eventId: input.event.eventId,
