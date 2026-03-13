@@ -42,7 +42,7 @@ import { isElectron } from "../env";
 import { APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { isMacPlatform, newCommandId, newProjectId, newThreadId } from "../lib/utils";
 import { applyThreadOrder, useStore } from "../store";
-import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
+import { isChatDeleteShortcut, isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -725,8 +725,18 @@ export default function Sidebar() {
 
       const allDeletedIds = deletedIds ?? new Set<ThreadId>();
       const shouldNavigateToFallback = routeThreadId === threadId;
+      // Prefer next thread in the same project, then fall back to any thread
+      const sameProjectFallback =
+        threads.find(
+          (entry) =>
+            entry.id !== threadId &&
+            !allDeletedIds.has(entry.id) &&
+            entry.projectId === thread.projectId,
+        )?.id ?? null;
       const fallbackThreadId =
-        threads.find((entry) => entry.id !== threadId && !allDeletedIds.has(entry.id))?.id ?? null;
+        sameProjectFallback ??
+        threads.find((entry) => entry.id !== threadId && !allDeletedIds.has(entry.id))?.id ??
+        null;
       await api.orchestration.dispatchCommand({
         type: "thread.delete",
         commandId: newCommandId(),
@@ -1090,6 +1100,29 @@ export default function Sidebar() {
         return;
       }
 
+      if (isChatDeleteShortcut(event, keybindings) && routeThreadId) {
+        event.preventDefault();
+        const threadToDelete = threads.find((t) => t.id === routeThreadId);
+        if (threadToDelete) {
+          const doDelete = async () => {
+            if (appSettings.confirmThreadDelete) {
+              const api = readNativeApi();
+              if (!api) return;
+              const confirmed = await api.dialogs.confirm(
+                [
+                  `Delete thread "${threadToDelete.title}"?`,
+                  "This permanently clears conversation history for this thread.",
+                ].join("\n"),
+              );
+              if (!confirmed) return;
+            }
+            await deleteThread(routeThreadId);
+          };
+          void doDelete();
+        }
+        return;
+      }
+
       const activeThread = routeThreadId
         ? threads.find((thread) => thread.id === routeThreadId)
         : undefined;
@@ -1128,7 +1161,9 @@ export default function Sidebar() {
       window.removeEventListener("mousedown", onMouseDown);
     };
   }, [
+    appSettings.confirmThreadDelete,
     clearSelection,
+    deleteThread,
     getDraftThread,
     handleNewThread,
     keybindings,

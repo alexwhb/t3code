@@ -214,6 +214,14 @@ export function isChatNewShortcut(
   return matchesCommandShortcut(event, keybindings, "chat.new", options);
 }
 
+export function isChatDeleteShortcut(
+  event: ShortcutEventLike,
+  keybindings: ResolvedKeybindingsConfig,
+  options?: ShortcutMatchOptions,
+): boolean {
+  return matchesCommandShortcut(event, keybindings, "chat.delete", options);
+}
+
 export function isChatNewLocalShortcut(
   event: ShortcutEventLike,
   keybindings: ResolvedKeybindingsConfig,
