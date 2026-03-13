@@ -6,7 +6,9 @@ import {
 } from "@t3tools/contracts";
 import { memo } from "react";
 import GitActionsControl from "../GitActionsControl";
-import { DiffIcon } from "lucide-react";
+import { DiffIcon, StickyNoteIcon } from "lucide-react";
+import { useAppSettings } from "../../appSettings";
+import { useScratchNotesContext } from "../../scratchNotesContext";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import ProjectScriptsControl, { type NewProjectScriptInput } from "../ProjectScriptsControl";
@@ -94,6 +96,7 @@ export const ChatHeader = memo(function ChatHeader({
           />
         )}
         {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
+        <ScratchNotesToggle />
         <Tooltip>
           <TooltipTrigger
             render={
@@ -122,3 +125,30 @@ export const ChatHeader = memo(function ChatHeader({
     </div>
   );
 });
+
+function ScratchNotesToggle() {
+  const { settings } = useAppSettings();
+  const scratchNotesCtx = useScratchNotesContext();
+
+  if (!settings.showScratchNotesButton || !scratchNotesCtx) return null;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            className="shrink-0"
+            pressed={false}
+            onPressedChange={() => scratchNotesCtx.openSheet()}
+            aria-label="Toggle scratch notes"
+            variant="outline"
+            size="xs"
+          >
+            <StickyNoteIcon className="size-3" />
+          </Toggle>
+        }
+      />
+      <TooltipPopup side="bottom">Scratch notes</TooltipPopup>
+    </Tooltip>
+  );
+}
