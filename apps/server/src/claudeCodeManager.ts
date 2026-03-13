@@ -34,6 +34,7 @@ interface ClaudeCodeSessionContext {
   child: ChildProcessWithoutNullStreams | null;
   output: readline.Interface | null;
   conversationId: string | null;
+  pendingConversationId: string | null;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   stopping: boolean;
   currentTurnId: TurnId | null;
@@ -172,6 +173,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
         child: null,
         output: null,
         conversationId: readResumeCursorConversationId(input.resumeCursor) ?? null,
+        pendingConversationId: null,
         pendingApprovals: new Map(),
         stopping: false,
         currentTurnId: null,
@@ -221,6 +223,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
     context.planMarkdown = null;
     context.planFileMarkdown = null;
     context.planFilePath = null;
+    context.pendingConversationId = null;
 
     // Claude Code CLI runs one-shot per turn with --print.
     // For follow-up turns, we use --continue to resume the conversation.
@@ -240,9 +243,10 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
       ...(hasAttachments ? { hasImages: true } : {}),
     });
 
-    // Kill any previous child that hasn't exited yet
     if (context.child && !context.child.killed && context.child.exitCode === null) {
-      context.child.kill();
+      throw new Error(
+        "Claude Code does not support overlapping turns. Wait for the active turn to finish or interrupt it before sending another message.",
+      );
     }
 
     const childEnv = { ...process.env };
@@ -471,12 +475,6 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
     const output = context.output!;
     const child = context.child!;
 
-    // Capture the turn ID at attachment time so the exit handler only
-    // operates on the turn that was active when this child was spawned.
-    // This prevents a race where a stale child's exit handler clobbers
-    // state belonging to a newer child spawned by a subsequent sendTurn().
-    const boundTurnId = context.currentTurnId;
-
     output.on("line", (line) => {
       // Ignore lines from a stale child whose output was superseded.
       if (context.child !== child) return;
@@ -599,12 +597,10 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
     const turnId = context.currentTurnId ?? undefined;
     const now = new Date().toISOString();
 
-    // Extract session/conversation ID from system events
+    // Track the candidate session ID for the in-flight turn, but only persist
+    // it as resumable state after Claude finishes successfully.
     if (eventType === "system" && typeof event.session_id === "string") {
-      context.conversationId = event.session_id;
-      this.updateSession(context, {
-        resumeCursor: { conversationId: event.session_id },
-      });
+      context.pendingConversationId = event.session_id;
     }
 
     // Map Claude Code stream-json events to ProviderEvents
@@ -785,10 +781,7 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
         // Capture session ID if present
         const sessionId = asString(event.session_id);
         if (sessionId) {
-          context.conversationId = sessionId;
-          this.updateSession(context, {
-            resumeCursor: { conversationId: sessionId },
-          });
+          context.pendingConversationId = sessionId;
         }
         break;
       }
@@ -938,12 +931,22 @@ export class ClaudeCodeManager extends EventEmitter<ClaudeCodeManagerEvents> {
       case "result": {
         // Turn completed with final result
         context.currentTurnId = null;
-        const conversationId = asString(event.session_id);
-        if (conversationId) {
+        const conversationId = asString(event.session_id) ?? context.pendingConversationId;
+        const isErrorResult = event.is_error === true;
+        if (conversationId && !isErrorResult) {
           context.conversationId = conversationId;
+          context.pendingConversationId = null;
           this.updateSession(context, {
             resumeCursor: { conversationId },
           });
+        } else if (isClaudeResumeError(event)) {
+          context.conversationId = null;
+          context.pendingConversationId = null;
+          this.updateSession(context, {
+            resumeCursor: null,
+          });
+        } else {
+          context.pendingConversationId = null;
         }
 
         // Fallback: if Claude produced a canonical plan file but did not
@@ -1092,6 +1095,20 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function isClaudeResumeError(event: Record<string, unknown>): boolean {
+  const errors = event.errors;
+  if (!Array.isArray(errors)) {
+    return false;
+  }
+
+  return errors.some((entry) => {
+    if (typeof entry !== "string") {
+      return false;
+    }
+    return entry.toLowerCase().includes("no conversation found with session id");
+  });
 }
 
 function isClaudePlanFilePath(filePath: string | undefined): filePath is string {

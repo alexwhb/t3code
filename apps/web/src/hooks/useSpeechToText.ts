@@ -73,7 +73,7 @@ export function useSpeechToText({
   transcribeAudio,
 }: UseSpeechToTextOptions): UseSpeechToTextResult {
   const [isListening, setIsListening] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isTranscribing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);

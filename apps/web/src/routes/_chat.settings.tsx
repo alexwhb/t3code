@@ -10,7 +10,7 @@ import {
   MAX_CUSTOM_MODEL_LENGTH,
   useAppSettings,
 } from "../appSettings";
-import { STT_PROVIDER_OPTIONS, type SttProviderKind } from "../sttProviders";
+import { STT_PROVIDER_OPTIONS } from "../sttProviders";
 import { PROVIDER_OPTIONS } from "../session-logic";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";

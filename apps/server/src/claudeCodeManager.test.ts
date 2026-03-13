@@ -303,6 +303,45 @@ describe("ClaudeCodeManager", () => {
     expect(events.some((event) => event.method === "session/exited")).toBe(false);
   });
 
+  it("does not persist a resume cursor before Claude finishes successfully", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-pending-resume");
+
+    await manager.startSession({
+      threadId,
+      runtimeMode: "full-access",
+    });
+
+    await manager.sendTurn({
+      threadId,
+      input: "Reply with OK",
+    });
+
+    child.stdout.write(`${JSON.stringify({ type: "system", session_id: "session-123" })}\n`);
+    child.stdout.write(
+      `${JSON.stringify({
+        type: "assistant",
+        session_id: "session-123",
+        message: {
+          id: "msg-1",
+          content: [{ type: "text", text: "OK" }],
+        },
+      })}\n`,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(manager.listSessions()).toEqual([
+      expect.not.objectContaining({
+        resumeCursor: { conversationId: "session-123" },
+      }),
+    ]);
+  });
+
   it("emits item/plan/proposed when assistant response contains ExitPlanMode with a plan", async () => {
     const child = makeFakeChildProcess();
     const manager = new ClaudeCodeManager({
@@ -610,67 +649,56 @@ describe("ClaudeCodeManager", () => {
     expect(planEvent).toBeUndefined();
   });
 
-  it("does not clobber new child when old child exits after sendTurn replaces it", async () => {
-    const child1 = makeFakeChildProcess();
-    const child2 = makeFakeChildProcess();
-    let callCount = 0;
-    const spawnProcess = vi.fn(() => {
-      callCount++;
-      return callCount === 1 ? child1 : child2;
-    }) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>;
+  it("rejects overlapping turns instead of resuming an in-flight Claude session", async () => {
+    const child = makeFakeChildProcess();
     const manager = new ClaudeCodeManager({
-      spawnProcess,
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
       spawnSyncProcess: makeSpawnSyncSuccess(),
     });
-    const threadId = ThreadId.makeUnsafe("thread-stale-exit");
-    const events: ProviderEvent[] = [];
-
-    manager.on("event", (event) => {
-      events.push(event);
-    });
+    const threadId = ThreadId.makeUnsafe("thread-overlapping-turns");
 
     await manager.startSession({ threadId, runtimeMode: "full-access" });
-
-    // Start first turn
     await manager.sendTurn({ threadId, input: "Turn 1" });
 
-    // Start second turn before the first child exits — this kills child1
-    // and replaces context.child/output with child2's handles.
-    await manager.sendTurn({ threadId, input: "Turn 2" });
+    await expect(manager.sendTurn({ threadId, input: "Turn 2" })).rejects.toThrow(
+      "Claude Code does not support overlapping turns.",
+    );
+  });
 
-    // Old child exits asynchronously. Before the fix this would close
-    // child2's readline and null out context.child.
-    child1.emit("exit", null, "SIGTERM");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  it("clears a poisoned resume cursor after Claude reports that the session ID is invalid", async () => {
+    const child = makeFakeChildProcess();
+    const manager = new ClaudeCodeManager({
+      spawnProcess: vi.fn(() => child) as NonNullable<ClaudeCodeManagerOptions["spawnProcess"]>,
+      spawnSyncProcess: makeSpawnSyncSuccess(),
+    });
+    const threadId = ThreadId.makeUnsafe("thread-invalid-resume");
 
-    // child2 should still be able to produce events
-    child2.stdout.write(
+    await manager.startSession({
+      threadId,
+      runtimeMode: "full-access",
+      resumeCursor: { conversationId: "session-123" },
+    });
+
+    await manager.sendTurn({ threadId, input: "Retry the task" });
+
+    child.stdout.write(
       `${JSON.stringify({
-        type: "assistant",
-        message: {
-          id: "msg-turn2",
-          content: [{ type: "text", text: "Turn 2 response" }],
-        },
+        type: "result",
+        is_error: true,
+        session_id: "failed-session",
+        errors: ["No conversation found with session ID: session-123"],
       })}\n`,
     );
-    child2.stdout.write(`${JSON.stringify({ type: "result", session_id: "session-456" })}\n`);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The turn/completed from child2's result should exist with the correct turnId
-    const turnCompletedEvents = events.filter((e) => e.method === "turn/completed");
-    const resultTurnCompleted = turnCompletedEvents.find(
-      (e) => (e.payload as any)?.turn?.status === "completed",
-    );
-    expect(resultTurnCompleted).toBeDefined();
-
-    // Session should be ready (not stuck in "running")
-    const sessions = manager.listSessions();
-    expect(sessions[0]).toMatchObject({ status: "ready" });
-
-    // The assistant message delta from child2 should have been received
-    const deltas = events.filter((e) => e.method === "item/agentMessage/delta");
-    expect(deltas.length).toBeGreaterThan(0);
+    expect(manager.listSessions()).toEqual([
+      expect.objectContaining({
+        threadId,
+        status: "ready",
+        resumeCursor: null,
+      }),
+    ]);
   });
 
   it("does not emit plan event for plain text when interactionMode is default", async () => {
